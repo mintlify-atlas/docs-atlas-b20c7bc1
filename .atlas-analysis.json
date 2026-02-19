@@ -1,0 +1,176 @@
+{
+  "projectType": "framework",
+  "projectName": "Unikraft",
+  "projectDescription": "A next-generation cloud native kernel designed to unlock best-in-class performance, security primitives and efficiency savings.",
+  "theme": "aspen",
+  "primaryColor": "#EC591A",
+  "lightColor": "#FF7A3D",
+  "darkColor": "#C5491A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/unikernels",
+              "concepts/architecture",
+              "concepts/modular-design",
+              "concepts/build-system"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-applications",
+              "guides/kraftfile-syntax",
+              "guides/configuration",
+              "guides/running-unikernels",
+              "guides/debugging"
+            ]
+          },
+          {
+            "group": "Platform Support",
+            "pages": [
+              "platforms/overview",
+              "platforms/kvm",
+              "platforms/xen",
+              "platforms/cloud-deployment"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/x86-64",
+              "architecture/arm64",
+              "architecture/arm32"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Internal Libraries",
+        "groups": [
+          {
+            "group": "Core Libraries",
+            "pages": [
+              "libraries/overview",
+              "libraries/ukboot",
+              "libraries/ukalloc",
+              "libraries/uksched",
+              "libraries/ukdebug"
+            ]
+          },
+          {
+            "group": "System Libraries",
+            "pages": [
+              "libraries/nolibc",
+              "libraries/syscall-shim",
+              "libraries/posix-compatibility"
+            ]
+          },
+          {
+            "group": "Memory Management",
+            "pages": [
+              "libraries/ukvmem",
+              "libraries/ukmmap",
+              "libraries/allocators"
+            ]
+          },
+          {
+            "group": "Networking & I/O",
+            "pages": [
+              "libraries/uknetdev",
+              "libraries/ukblkdev",
+              "libraries/virtio"
+            ]
+          },
+          {
+            "group": "File Systems",
+            "pages": [
+              "libraries/vfs",
+              "libraries/9pfs",
+              "libraries/ramfs",
+              "libraries/devfs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Drivers",
+        "groups": [
+          {
+            "group": "Device Drivers",
+            "pages": [
+              "drivers/overview",
+              "drivers/virtio",
+              "drivers/console",
+              "drivers/interrupt-controllers",
+              "drivers/bus-systems"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "development/contributing",
+              "development/coding-conventions",
+              "development/submitting-patches"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/porting-applications",
+              "advanced/creating-libraries",
+              "advanced/platform-development",
+              "advanced/performance-optimization"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Instantaneous cold-boots (milliseconds)",
+    "Modular design with 80+ internal libraries",
+    "Multi-architecture support (x86_64, ARM64, ARM32)",
+    "Multiple platform targets (KVM, Xen)",
+    "POSIX compatibility layer",
+    "Minimal attack surface and security-focused design",
+    "Kconfig-based build system",
+    "VirtIO driver support",
+    "File system support (9P, ramfs, devfs)",
+    "Efficient resource utilization"
+  ],
+  "publicApiSurface": [
+    "ukboot - Boot and initialization",
+    "ukalloc - Memory allocation interfaces",
+    "uksched - Scheduling API",
+    "uknetdev - Network device API",
+    "ukblkdev - Block device API",
+    "ukvmem - Virtual memory management",
+    "syscall_shim - System call interface",
+    "nolibc - Lightweight C library",
+    "posix-* - POSIX compatibility libraries",
+    "uk9p - 9P file system",
+    "virtio - VirtIO device drivers",
+    "ukdebug - Debugging utilities",
+    "ukprint - Printing interface",
+    "uklock - Locking primitives",
+    "ukbus - Bus system abstraction"
+  ]
+}
