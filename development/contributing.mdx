@@ -1,0 +1,168 @@
+---
+title: Contributing to Unikraft
+description: Guide to contributing to the Unikraft project
+---
+
+Welcome to Unikraft! We are happy that you are interested in contributing to this project. New features, bug fixes, improvements, maintenance, and everything in between as contributions are welcome!
+
+The Unikraft project is an open source project that encourages fostering open collaboration. This guide will help you get started with contributing to Unikraft.
+
+## Getting Started
+
+Before contributing, please familiarize yourself with:
+
+- The [coding conventions](/development/coding-conventions) used throughout the project
+- The [patch submission process](/development/submitting-patches) for getting your changes merged
+- The Unikraft codebase structure and architecture
+
+## Ways to Contribute
+
+There are many ways to contribute to Unikraft:
+
+- **Bug Fixes**: Help identify and fix issues in the codebase
+- **New Features**: Implement new functionality or improvements
+- **Documentation**: Improve or expand project documentation
+- **Code Review**: Review pull requests from other contributors
+- **Testing**: Test new features and report issues
+- **Community Support**: Help other users on community channels
+
+## Development Workflow
+
+<Steps>
+  <Step title="Fork and Clone">
+    Fork the Unikraft repository and clone it to your local machine:
+    
+    ```bash
+    git clone https://github.com/YOUR_USERNAME/unikraft.git
+    cd unikraft
+    ```
+  </Step>
+
+  <Step title="Create a Branch">
+    Create a new branch for your changes:
+    
+    ```bash
+    git checkout -b your-feature-branch
+    ```
+    
+    Use descriptive branch names that reflect the changes you're making.
+  </Step>
+
+  <Step title="Make Changes">
+    Implement your changes following the [coding conventions](/development/coding-conventions).
+    
+    Ensure your changes:
+    - Follow the project's coding style
+    - Include appropriate documentation
+    - Are tested against relevant architectures and platforms
+  </Step>
+
+  <Step title="Test Your Changes">
+    Before submitting, test your changes thoroughly:
+    
+    - Build Unikraft with your changes
+    - Run relevant test cases
+    - Verify functionality on target platforms
+  </Step>
+
+  <Step title="Run Code Quality Checks">
+    Run the checkpatch script to verify your code meets quality standards:
+    
+    ```bash
+    ./support/scripts/checkpatch.uk -f path/to/your/file.c
+    ```
+    
+    Or check your commits:
+    
+    ```bash
+    ./support/scripts/checkpatch.uk -g HEAD~1..HEAD
+    ```
+  </Step>
+
+  <Step title="Commit Changes">
+    Commit your changes with a proper commit message following the [commit message format](/development/submitting-patches#commit-message-format).
+    
+    **Important**: All commits must include a DCO sign-off line:
+    
+    ```bash
+    git commit -s -m "component: Brief description of changes"
+    ```
+    
+    The `-s` flag automatically adds the `Signed-off-by:` line.
+  </Step>
+
+  <Step title="Push and Create PR">
+    Push your branch and create a pull request:
+    
+    ```bash
+    git push origin your-feature-branch
+    ```
+    
+    Then open a pull request on GitHub following the [PR guidelines](/development/submitting-patches#pull-request-process).
+  </Step>
+</Steps>
+
+## Developer Certificate of Origin (DCO)
+
+All contributions to Unikraft must include a Developer Certificate of Origin sign-off. This certifies that you have the right to submit the code and agree to the [DCO terms](https://developercertificate.org/).
+
+### Adding the Sign-off
+
+To add the DCO sign-off to your commits, use the `-s` flag:
+
+```bash
+git commit -s -m "Your commit message"
+```
+
+This adds a `Signed-off-by:` line with your name and email:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+### Automated Checks
+
+All pull requests are automatically checked for DCO sign-off. PRs without proper sign-off will fail the CI checks and cannot be merged.
+
+## Code Review Process
+
+Once you submit a pull request:
+
+1. **Automated Checks**: GitHub Actions will run automated checks including:
+   - DCO sign-off verification
+   - Commit message format validation
+   - Code style checks (checkpatch)
+
+2. **Maintainer Review**: Project maintainers will review your changes and may:
+   - Request modifications
+   - Ask for clarification
+   - Suggest improvements
+
+3. **Iterate**: Address review feedback by:
+   - Making requested changes
+   - Pushing new commits to your branch
+   - Responding to comments
+
+4. **Merge**: Once approved, a maintainer will merge your pull request
+
+## Getting Help
+
+If you need help with your contribution:
+
+- Check the [documentation](https://unikraft.org/docs)
+- Ask questions on the [Unikraft Discord](https://bit.ly/UnikraftDiscord)
+- Open a [GitHub Discussion](https://github.com/unikraft/unikraft/discussions)
+
+## Community Guidelines
+
+- Be respectful and inclusive in all interactions
+- Provide constructive feedback during code reviews
+- Be patient with new contributors
+- Follow the [code of conduct](https://unikraft.org/community/code-of-conduct)
+
+## Resources
+
+- [GitHub Repository](https://github.com/unikraft/unikraft)
+- [Coding Conventions](/development/coding-conventions)
+- [Submitting Patches](/development/submitting-patches)
+- [Developer Certificate of Origin](https://developercertificate.org/)

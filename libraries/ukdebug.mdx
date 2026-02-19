@@ -1,0 +1,508 @@
+---
+title: ukdebug - Debugging Utilities
+description: Debugging, assertion, tracing, and crash reporting utilities for Unikraft
+---
+
+The `ukdebug` library provides essential debugging facilities for Unikraft, including assertions, tracepoints, crash reporting, and GDB stub support. It helps developers diagnose issues and understand system behavior.
+
+## Overview
+
+`ukdebug` provides:
+- **Assertions** - Runtime condition checking with `UK_ASSERT()`
+- **Tracepoints** - Lightweight event tracing system
+- **Crash reporting** - Detailed crash information on failures
+- **GDB stub** - Remote debugging support via serial console
+- **Warning macros** - Non-fatal condition warnings
+
+## Assertion APIs
+
+### UK_ASSERT
+
+```c
+UK_ASSERT(x)
+```
+
+Assert that condition `x` is true. If the assertion fails, prints an error message and triggers a system crash.
+
+<ParamField path="x" type="expression">
+  Condition to check (must evaluate to true)
+</ParamField>
+
+**Behavior**:
+- If `x` is false: Prints "Assertion failure: x" and crashes
+- If `x` is true: No-op
+- If `CONFIG_LIBUKDEBUG_ENABLE_ASSERT` is disabled: Always no-op
+
+**Example**:
+```c
+void *ptr = uk_malloc(a, 1024);
+UK_ASSERT(ptr != NULL);  /* Crash if allocation failed */
+```
+
+**Location**: `lib/ukdebug/include/uk/assert.h:52`
+
+---
+
+### UK_WARNIF
+
+```c
+UK_WARNIF(x)
+```
+
+Issue a warning if condition `x` is true. Non-fatal variant of assertion.
+
+<ParamField path="x" type="expression">
+  Condition to check (warns if true)
+</ParamField>
+
+**Behavior**:
+- If `x` is true: Prints "Condition warning: x"
+- If `x` is false: No-op
+- If `CONFIG_LIBUKDEBUG_ENABLE_ASSERT` is disabled: Always no-op
+
+**Example**:
+```c
+UK_WARNIF(remaining_memory < threshold);
+```
+
+**Location**: `lib/ukdebug/include/uk/assert.h:61`
+
+## Tracepoint APIs
+
+Tracepoints provide a lightweight mechanism to record events with minimal overhead. They can be enabled/disabled at compile time.
+
+### UK_TRACEPOINT
+
+```c
+UK_TRACEPOINT(trace_name, fmt, ...)
+```
+
+Define a tracepoint for recording events.
+
+<ParamField path="trace_name" type="identifier">
+  Name of the tracepoint function
+</ParamField>
+
+<ParamField path="fmt" type="string">
+  Format string describing the event
+</ParamField>
+
+<ParamField path="..." type="types">
+  Types of arguments (e.g., `int`, `const char *`)
+</ParamField>
+
+**Example**:
+```c
+/* Define tracepoint */
+UK_TRACEPOINT(trace_alloc, "ptr=%p size=%lu", void *, __sz);
+
+/* Use tracepoint */
+void my_alloc_function(void)
+{
+    void *ptr = malloc(1024);
+    trace_alloc(ptr, 1024);  /* Record event */
+}
+```
+
+**Location**: `lib/ukdebug/include/uk/trace.h:286`
+
+### Enabling Tracepoints
+
+Tracepoints are only active when:
+1. `CONFIG_LIBUKDEBUG_TRACEPOINTS` is enabled
+2. Either `UK_DEBUG_TRACE` is defined OR `CONFIG_LIBUKDEBUG_ALL_TRACEPOINTS` is enabled
+
+To enable tracepoints for a specific file:
+```c
+#define UK_DEBUG_TRACE
+#include <uk/trace.h>
+```
+
+Or enable all tracepoints globally with `CONFIG_LIBUKDEBUG_ALL_TRACEPOINTS`.
+
+### Tracepoint Buffer
+
+Tracepoints are stored in a fixed-size circular buffer configured by:
+
+```kconfig
+config LIBUKDEBUG_TRACE_BUFFER_SIZE
+    int "Size of the trace buffer"
+    default 16384
+```
+
+When the buffer is full, tracing automatically disables itself.
+
+## Crash Reporting
+
+When enabled, `ukdebug` provides detailed crash information when the system crashes.
+
+### Crash Screen Features
+
+The crash screen can display:
+- **Crash reason** - Exception type and cause
+- **Register dump** - CPU register state at crash
+- **Stack dump** - Recent stack contents
+- **Call trace** - Function call chain leading to crash
+
+### Configuration
+
+```kconfig
+menuconfig LIBUKDEBUG_CRASH_SCREEN
+    bool "Enable crash report"
+    default y
+    depends on LIBUKPRINT
+```
+
+Enable crash reporting on the console.
+
+#### Stack Printing
+
+```kconfig
+config LIBUKDEBUG_CRASH_PRINT_STACK
+    bool "Print stack"
+    default y if LIBUKNOFAULT
+```
+
+Output a hexdump of recent stack words. Requires `libuknofault` for safety.
+
+```kconfig
+config LIBUKDEBUG_CRASH_PRINT_STACK_WORDS
+    int "Number of stack words to print"
+    default 8
+    depends on LIBUKDEBUG_CRASH_PRINT_STACK
+```
+
+#### Call Trace
+
+```kconfig
+config LIBUKDEBUG_CRASH_PRINT_CALL_TRACE
+    bool "Print call trace"
+    default y if LIBUKNOFAULT
+```
+
+Output a call trace (backtrace) when crashing. Requires `libuknofault` for safety.
+
+### Crash Actions
+
+```kconfig
+choice
+    prompt "Crash action"
+    default LIBUKDEBUG_CRASH_ACTION_HALT
+```
+
+Action to perform after a crash:
+
+- `LIBUKDEBUG_CRASH_ACTION_HALT` - Halt the system
+- `LIBUKDEBUG_CRASH_ACTION_REBOOT` - Reboot the system
+
+For reboot action:
+```kconfig
+config LIBUKDEBUG_CRASH_REBOOT_DELAY
+    int "Reboot delay"
+    default 10
+    depends on LIBUKDEBUG_CRASH_ACTION_REBOOT
+```
+
+Delay in seconds before rebooting after crash.
+
+## GDB Stub
+
+The GDB stub allows remote debugging of Unikraft via serial console.
+
+### Configuration
+
+```kconfig
+config LIBUKDEBUG_GDBSTUB
+    bool "GDB stub"
+    depends on (ARCH_X86_64 || ARCH_ARM_64)
+    depends on LIBUKCONSOLE
+    depends on LIBUKLIBPARAM
+```
+
+Enable GDB stub support. Available on x86_64 and ARM64.
+
+### Usage
+
+1. Enable `LIBUKDEBUG_GDBSTUB` in configuration
+2. Set kernel parameter: `debug.gdb_cons=0` (console ID to use)
+3. Boot the unikernel
+4. Connect GDB from host:
+   ```bash
+   gdb unikernel.dbg
+   (gdb) target remote /dev/ttyS0
+   ```
+
+### GDB Stub Options
+
+```kconfig
+config LIBUKDEBUG_GDBSTUB_ALWAYS_ACK
+    bool "Always use acknowledgments"
+    depends on LIBUKDEBUG_GDBSTUB
+```
+
+Use acknowledgment packets for reliability. This slows down communication but catches transmission errors on unreliable connections.
+
+## Configuration Options Summary
+
+### Assertions
+
+```kconfig
+config LIBUKDEBUG_ENABLE_ASSERT
+    bool "Enable assertions"
+    default y
+```
+
+Enable or disable all assertions. When disabled, `UK_ASSERT()` and `UK_WARNIF()` become no-ops.
+
+### Tracepoints
+
+```kconfig
+menuconfig LIBUKDEBUG_TRACEPOINTS
+    bool "Enable tracepoints"
+    default n
+```
+
+Enable the tracepoint system.
+
+```kconfig
+config LIBUKDEBUG_ALL_TRACEPOINTS
+    bool "Enable all tracepoints at once"
+    default n
+    depends on LIBUKDEBUG_TRACEPOINTS
+```
+
+Enable all tracepoints system-wide without requiring per-file `UK_DEBUG_TRACE` definitions.
+
+## Usage Examples
+
+### Basic Assertions
+
+```c
+#include <uk/assert.h>
+
+void example_assertions(void)
+{
+    int *array = uk_malloc(a, 100 * sizeof(int));
+    
+    /* Fatal assertion - crash if false */
+    UK_ASSERT(array != NULL);
+    
+    /* Warning - prints message if true */
+    UK_WARNIF(array == NULL);
+    
+    /* Assertions can check complex conditions */
+    UK_ASSERT(array != NULL && 100 > 0);
+    
+    /* Use in expressions */
+    UK_ASSERT(((uintptr_t)array & 7) == 0);  /* Check alignment */
+}
+```
+
+### Defensive Programming
+
+```c
+#include <uk/assert.h>
+
+int process_buffer(void *buf, size_t len)
+{
+    /* Check preconditions */
+    UK_ASSERT(buf != NULL);
+    UK_ASSERT(len > 0);
+    UK_ASSERT(len <= MAX_BUFFER_SIZE);
+    
+    /* Process buffer... */
+    
+    return 0;
+}
+```
+
+### Defining and Using Tracepoints
+
+```c
+#define UK_DEBUG_TRACE
+#include <uk/trace.h>
+
+/* Define tracepoint with no arguments */
+UK_TRACEPOINT(trace_system_init, "System initialization started");
+
+/* Define tracepoint with arguments */
+UK_TRACEPOINT(trace_memory_alloc, "ptr=%p size=%lu align=%lu",
+              void *, __sz, __sz);
+
+UK_TRACEPOINT(trace_thread_create, "name=%s tid=%d",
+              const char *, int);
+
+void example_tracing(void)
+{
+    /* Call tracepoints */
+    trace_system_init();
+    
+    void *ptr = malloc(1024);
+    trace_memory_alloc(ptr, 1024, 8);
+    
+    trace_thread_create("worker", 42);
+}
+```
+
+### Conditional Warnings
+
+```c
+#include <uk/assert.h>
+
+void example_warnings(void)
+{
+    size_t remaining = get_free_memory();
+    size_t threshold = 1024 * 1024;  /* 1 MB */
+    
+    /* Warn if memory is low */
+    UK_WARNIF(remaining < threshold);
+    
+    /* Warn on unusual conditions */
+    int retries = connect_to_server();
+    UK_WARNIF(retries > 3);
+}
+```
+
+### Performance-Critical Code with Tracepoints
+
+```c
+#define UK_DEBUG_TRACE
+#include <uk/trace.h>
+
+UK_TRACEPOINT(trace_packet_rx, "len=%lu proto=%d", __sz, int);
+UK_TRACEPOINT(trace_packet_tx, "len=%lu dest=%d", __sz, int);
+
+void fast_path_packet_processing(void)
+{
+    /* Tracepoints have very low overhead when enabled
+     * and zero overhead when disabled */
+    trace_packet_rx(pkt_len, protocol);
+    
+    /* Process packet... */
+    
+    trace_packet_tx(pkt_len, destination);
+}
+```
+
+### Crash Handler Integration
+
+```c
+#include <uk/essentials.h>
+
+/* This function is called on assertion failure */
+void my_crash_handler(void)
+{
+    /* Perform cleanup before crash */
+    flush_logs();
+    save_state();
+    
+    /* Continue to crash screen */
+}
+```
+
+## Tracepoint Data Format
+
+Tracepoints store events in a binary format with the following structure:
+
+### Tracepoint Header
+
+```c
+struct uk_tracepoint_header {
+    uint32_t magic;    /* UK_TP_HEADER_MAGIC (0x64685254) */
+    uint32_t size;     /* Size of event data */
+    __nsec time;       /* Timestamp */
+    void *cookie;      /* Tracepoint identifier */
+};
+```
+
+**Location**: `lib/ukdebug/include/uk/trace.h:57`
+
+### Tracepoint Definition
+
+Tracepoint metadata is stored in the `.uk_tracepoints_list` section:
+
+```c
+struct {
+    uint32_t magic;           /* UK_TP_DEF_MAGIC (0x65645054) */
+    uint32_t size;            /* Size of this structure */
+    uint64_t cookie;          /* Unique identifier */
+    uint8_t args_nr;          /* Number of arguments */
+    uint8_t name_len;         /* Length of name string */
+    uint8_t format_len;       /* Length of format string */
+    uint8_t sizes[N];         /* Size of each argument */
+    uint8_t types[N];         /* Type of each argument */
+    char name[...];           /* Tracepoint name */
+    char format[...];         /* Format string */
+};
+```
+
+## Best Practices
+
+### Assertions
+
+1. **Use liberally** - Assertions help catch bugs early
+2. **Check preconditions** - Validate function arguments
+3. **Check postconditions** - Verify results before returning
+4. **Don't use for error handling** - Assertions are for bugs, not expected errors
+5. **Keep conditions simple** - Complex assertions are hard to understand
+
+### Tracepoints
+
+1. **Minimize overhead** - Keep traced data small
+2. **Use meaningful names** - `trace_packet_rx` not `trace_evt1`
+3. **Include context** - Add relevant parameters to understand events
+4. **Don't trace in hot loops** - Too many events fill the buffer quickly
+5. **Define selectively** - Only enable tracepoints you need with `UK_DEBUG_TRACE`
+
+### Crash Reporting
+
+1. **Enable stack printing** - Helps diagnose crashes
+2. **Enable call traces** - Shows the path to the crash
+3. **Use with uknofault** - Prevents infinite crash loops
+4. **Save logs** - Configure logging to persistent storage for post-mortem analysis
+
+## Debugging Workflow
+
+### Finding Bugs with Assertions
+
+1. Add assertions to validate assumptions
+2. Enable assertions: `CONFIG_LIBUKDEBUG_ENABLE_ASSERT=y`
+3. Run application and wait for assertion failure
+4. Examine crash report and stack trace
+5. Fix the bug and re-test
+
+### Tracing System Behavior
+
+1. Define tracepoints at key events
+2. Enable tracing: `CONFIG_LIBUKDEBUG_TRACEPOINTS=y`
+3. Run application to collect traces
+4. Extract trace buffer and analyze events
+5. Understand timing and event ordering
+
+### Remote Debugging with GDB
+
+1. Enable GDB stub in configuration
+2. Boot with `debug.gdb_cons=0`
+3. Connect GDB from development machine
+4. Set breakpoints and inspect state
+5. Step through code and examine variables
+
+## Dependencies
+
+`ukdebug` depends on:
+- `HAVE_LIBC` or `LIBNOLIBC` - For basic types and string functions
+- `LIBUKLIBID` - For library identification
+
+Optional dependencies:
+- `LIBUKPRINT` - For crash screen output
+- `LIBUKNOFAULT` - For safe memory access in crash handlers
+- `LIBUKCONSOLE` - For GDB stub serial communication
+- `LIBUKLIBPARAM` - For GDB stub configuration parameters
+- `LIBISRLIB` - For interrupt handling in GDB stub
+- `LIBUKBITOPS` - For bit operations
+
+## See Also
+
+- [ukboot - Boot and Initialization](/libraries/ukboot)
+- [ukalloc - Memory Allocation](/libraries/ukalloc)
+- [uksched - Scheduling](/libraries/uksched)

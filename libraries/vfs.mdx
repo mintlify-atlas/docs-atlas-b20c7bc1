@@ -1,0 +1,350 @@
+---
+title: Virtual File System (VFS)
+description: POSIX-compatible virtual file system layer that provides a unified interface for file operations in Unikraft
+---
+
+The `posix-vfs` library implements a POSIX-compatible virtual filesystem in Unikraft on top of the `ukfs` API. It provides a unified interface for all file operations working with paths and manages the overall VFS state.
+
+## Overview
+
+The Virtual File System (VFS) acts as an abstraction layer between applications and the underlying filesystem implementations. It provides:
+
+- **POSIX compatibility**: Full support for standard POSIX file operations
+- **Multiple filesystem support**: Ability to mount and use different filesystem types simultaneously
+- **Path-based operations**: Complete set of operations working with file paths
+- **Mount table management**: Dynamic mounting and unmounting of filesystems
+- **Per-process context**: Support for per-process working directories, root directories, and umask
+
+## Architecture
+
+### VFS Layers
+
+The VFS architecture consists of several layers:
+
+1. **Application Layer**: POSIX syscalls (`open`, `read`, `write`, etc.)
+2. **VFS Layer (`posix-vfs`)**: Path resolution, mount management, and operation dispatch
+3. **Filesystem Driver Layer**: Specific filesystem implementations (9pfs, ramfs, devfs)
+4. **Storage Layer**: Block devices, network devices, or memory
+
+### Key Components
+
+#### Mount Table
+
+The mount table (`vfs_mtab`) tracks all mounted filesystems:
+
+```c
+struct vfs_mtab_entry {
+    const struct uk_file *point;      // Mount point
+    const struct uk_file *root;       // Filesystem root
+    const struct uk_file *parent_root; // Parent filesystem root
+};
+```
+
+The mount table supports up to `CONFIG_LIBPOSIX_VFS_MAX_MOUNTS` mount points (default: 8).
+
+#### VFS Process State
+
+Each process maintains its own VFS context:
+
+```c
+struct vfs_proc_state {
+    const struct uk_file *fsroot;  // Process root directory
+    struct uk_ofile *cwd;          // Current working directory
+    mode_t umask;                  // File creation mask
+};
+```
+
+This enables features like `chroot`, per-process current directories, and umask.
+
+## Configuration
+
+Enable the VFS library in your application configuration:
+
+```console
+$ kraft menuconfig
+```
+
+Navigate to: **Library Configuration → posix-vfs: Filesystem support**
+
+### Key Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `LIBPOSIX_VFS_SYSCALLS` | Provide filesystem syscalls | Enabled |
+| `LIBPOSIX_VFS_PERMISSIONS` | Enforce filesystem permissions | Disabled |
+| `LIBPOSIX_VFS_MOUNT_CLEANUP` | Unmount filesystems on shutdown | Disabled |
+| `LIBPOSIX_VFS_MAX_MOUNTS` | Maximum number of mount points | 8 |
+| `LIBPOSIX_VFS_MAX_SYMDEPTH` | Maximum symlink nesting depth | 32 |
+
+### Symlink Resolution
+
+Two strategies are available for limiting symlink traversal:
+
+- **Nesting depth** (`LIBPOSIX_VFS_SYMLIMIT_DEPTH`): Limits based on symlink nesting depth
+- **Total count** (`LIBPOSIX_VFS_SYMLIMIT_NUM`): Limits based on total number of symlinks encountered
+
+## API Reference
+
+### Mounting Filesystems
+
+Mount a filesystem node at a specific path:
+
+```c
+#include <uk/posix-vfs.h>
+
+int uk_posix_vfs_mount(const char *path, const struct uk_file *node);
+```
+
+**Example:**
+```c
+struct uk_file *fs_root = /* obtain filesystem root */;
+int rc = uk_posix_vfs_mount("/mnt/data", fs_root);
+if (rc < 0) {
+    uk_pr_err("Failed to mount: %d\n", rc);
+}
+```
+
+### Using mount(2) Syscall
+
+The standard `mount` syscall is also available:
+
+```c
+int uk_sys_mount(const char *source, const char *target, 
+                 const char *fstype, unsigned long flags, void *data);
+```
+
+**Example:**
+```c
+// Mount a 9pfs filesystem
+int rc = mount("rootfs", "/mnt/shared", "9pfs", 0, "version=9P2000.L");
+if (rc < 0) {
+    perror("mount failed");
+}
+```
+
+### Directory Operations
+
+```c
+// Change current directory
+int uk_sys_chdir(const char *path);
+
+// Get current working directory
+ssize_t uk_sys_getcwd(char *buf, size_t len);
+
+// Change root directory
+int uk_sys_chroot(const char *path);
+
+// Create directory
+int uk_sys_mkdir(const char *path, mode_t mode);
+
+// Remove directory
+int uk_sys_rmdir(const char *path);
+```
+
+### File Operations
+
+```c
+// Open file
+struct uk_ofile *uk_sys_open(const char *path, int flags, mode_t mode);
+
+// Get file status
+int uk_sys_stat(const char *path, struct stat *statbuf);
+
+// Change permissions
+int uk_sys_chmod(const char *path, mode_t mode);
+
+// Create symbolic link
+int uk_sys_symlink(const char *target, const char *linkpath);
+
+// Read symbolic link
+ssize_t uk_sys_readlink(const char *path, char *buf, size_t bufsz);
+```
+
+## Automatic Mounting with fstab
+
+The `posix-vfs-fstab` library provides automatic filesystem mounting at boot time.
+
+### Configuration
+
+Enable in **Library Configuration → posix-vfs-fstab: Mount filesystems at boot**
+
+#### Built-in fstab
+
+Configure up to 4 filesystem entries directly in the kernel configuration:
+
+```kconfig
+CONFIG_LIBPOSIX_VFS_FSTAB_BUILTIN=y
+```
+
+Each entry can specify:
+- Device/source
+- Mount point
+- Filesystem type
+- Mount flags
+- Mount options
+
+#### User-provided fstab
+
+Pass filesystem table via kernel parameters:
+
+```kconfig
+CONFIG_LIBPOSIX_VFS_FSTAB_USER=y
+```
+
+Command line format:
+```
+vfs.fstab="<dev>:<mntpoint>:<fsdriver>:<flags>:<opts>"
+```
+
+**Example:**
+```console
+$ qemu-system-x86_64 ... -append "vfs.fstab=rootfs:/mnt/shared:9pfs::version=9P2000.L"
+```
+
+#### Embedded initrd
+
+Embed a CPIO initrd directly in the unikernel:
+
+```kconfig
+CONFIG_LIBPOSIX_VFS_FSTAB_EINITRD=y
+CONFIG_LIBPOSIX_VFS_FSTAB_EINITRD_PATH="$(UK_APP)/initrd.cpio"
+```
+
+### Automatic /dev Mounting
+
+Automatically mount devfs at `/dev`:
+
+```kconfig
+CONFIG_LIBPOSIX_VFS_FSTAB_MOUNT_DEV=y
+```
+
+This requires `LIBUKFS_DEVFS` to be enabled.
+
+## How Filesystems Plug Into VFS
+
+Filesystem implementations register with VFS through the filesystem driver interface.
+
+### Filesystem Registration
+
+Each filesystem driver defines VFS operations:
+
+```c
+struct vfsops {
+    int (*vfs_mount)(struct mount *, const char *, int, const void *);
+    int (*vfs_unmount)(struct mount *, int);
+    int (*vfs_sync)(struct mount *);
+    int (*vfs_vget)(struct mount *, ino_t, struct vnode **);
+    int (*vfs_statfs)(struct mount *, struct statfs *);
+    struct vnops *vfs_vnops;
+};
+```
+
+Register a filesystem type:
+
+```c
+static struct vfscore_fs_type my_fs = {
+    .vs_name = "myfs",
+    .vs_init = NULL,
+    .vs_op   = &my_fs_vfsops
+};
+
+UK_FS_REGISTER(my_fs);
+```
+
+### Vnode Operations
+
+Each filesystem must implement vnode operations for file/directory manipulation:
+
+```c
+struct vnops {
+    vnop_open_t        vop_open;
+    vnop_close_t       vop_close;
+    vnop_read_t        vop_read;
+    vnop_write_t       vop_write;
+    vnop_seek_t        vop_seek;
+    vnop_ioctl_t       vop_ioctl;
+    vnop_lookup_t      vop_lookup;
+    vnop_create_t      vop_create;
+    vnop_mkdir_t       vop_mkdir;
+    vnop_rmdir_t       vop_rmdir;
+    vnop_remove_t      vop_remove;
+    vnop_rename_t      vop_rename;
+    vnop_getattr_t     vop_getattr;
+    vnop_setattr_t     vop_setattr;
+    // ... and more
+};
+```
+
+## Use Cases
+
+### Multi-Filesystem Setup
+
+Mount multiple filesystems for different purposes:
+
+```c
+// Mount 9pfs for shared host access
+mount("shared", "/host", "9pfs", 0, "version=9P2000.L");
+
+// Mount ramfs for temporary files
+mount(NULL, "/tmp", "ramfs", 0, NULL);
+
+// Mount devfs for device access
+mount(NULL, "/dev", "devfs", 0, NULL);
+```
+
+### Chroot Environment
+
+Create isolated filesystem environments:
+
+```c
+// Create application sandbox
+mkdir("/sandbox", 0755);
+mount("appdata", "/sandbox", "ramfs", 0, NULL);
+
+// Change root for security
+if (chroot("/sandbox") < 0) {
+    perror("chroot failed");
+    exit(1);
+}
+
+// Now filesystem access is restricted to /sandbox
+chdir("/");
+```
+
+### Custom Working Directory
+
+Each process can have its own working directory:
+
+```c
+pid_t pid = fork();
+if (pid == 0) {
+    // Child process
+    chdir("/tmp/child");
+    // All relative paths are now relative to /tmp/child
+    open("data.txt", O_RDONLY); // Opens /tmp/child/data.txt
+}
+```
+
+## Performance Considerations
+
+- **Mount table size**: Larger mount tables consume more memory but allow more filesystems
+- **Symlink depth**: Lower limits improve security but may break legitimate symlink chains
+- **Path resolution**: Deeply nested directories require more traversal operations
+- **Filesystem choice**: Different filesystems have different performance characteristics:
+  - **ramfs**: Fastest, memory-limited
+  - **9pfs**: Network overhead, suitable for shared access
+  - **devfs**: Direct device access, minimal overhead
+
+## Best Practices
+
+1. **Mount early**: Use `posix-vfs-fstab` to mount filesystems before application starts
+2. **Limit mounts**: Only mount what you need to reduce overhead
+3. **Use appropriate filesystems**: Choose the right filesystem for each use case
+4. **Clean unmount**: Enable `LIBPOSIX_VFS_MOUNT_CLEANUP` for proper shutdown
+5. **Set reasonable limits**: Configure symlink and mount limits based on application needs
+
+## Related Libraries
+
+- [9pfs](/libraries/9pfs) - Network-based pass-through filesystem
+- [ramfs](/libraries/ramfs) - Fast RAM-based filesystem
+- [devfs](/libraries/devfs) - Device filesystem for /dev

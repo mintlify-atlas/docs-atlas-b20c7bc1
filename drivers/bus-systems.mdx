@@ -1,0 +1,662 @@
+---
+title: Bus System Drivers
+description: PCI and Platform bus drivers for device enumeration and management
+---
+
+# Bus System Drivers
+
+Bus drivers in Unikraft provide the infrastructure for discovering, enumerating, and managing hardware devices. The bus abstraction layer (`libukbus`) defines a common interface that specific bus implementations extend.
+
+## Bus Architecture
+
+Unikraft's bus system follows a hierarchical model:
+
+```
+libukbus (Bus abstraction)
+    ├── PCI Bus (libukbus_pci)
+    │   └── PCI Devices
+    └── Platform Bus (libukbus_platform)
+        └── Platform Devices (FDT-based)
+```
+
+### Bus Registration
+
+Buses register during system initialization:
+
+```c
+struct uk_bus {
+    UK_TAILQ_ENTRY(struct uk_bus) list;
+    const char *name;
+    int (*probe)(void);
+    // Other bus operations
+};
+
+void uk_bus_register(struct uk_bus *bus);
+```
+
+### Device-Driver Matching
+
+The bus is responsible for matching devices with drivers:
+
+1. **Device Discovery** - Enumerate devices on the bus
+2. **Driver Registration** - Collect available drivers
+3. **Matching** - Find compatible driver for each device
+4. **Probing** - Call driver's probe/add function
+
+## PCI Bus Driver
+
+The PCI bus driver (`libukbus_pci`) provides support for PCI and PCIe devices.
+
+### Configuration
+
+```kconfig
+CONFIG_LIBUKBUS_PCI=y
+CONFIG_HAVE_PCI=y
+CONFIG_LIBUKBUS=y
+CONFIG_ARCH_X86_64=y           # or ARM64
+```
+
+**Optional features:**
+```kconfig
+CONFIG_LIBUKBUS_PCI_ECAM=y     # ECAM support for ARM64
+CONFIG_LIBUKBUS_PLATFORM=y     # Required for ECAM
+CONFIG_LIBFDT=y                # Device tree support
+CONFIG_LIBUKOFW=y              # Open Firmware wrapper
+```
+
+### PCI Architecture
+
+#### Configuration Space
+
+PCI devices are configured through a 256-byte configuration space:
+
+```
+Offset  Register
+------  --------
+0x00    Vendor ID (16-bit)
+0x02    Device ID (16-bit)
+0x04    Command (16-bit)
+0x06    Status (16-bit)
+0x08    Revision ID (8-bit)
+0x09    Class Code (24-bit)
+0x0C    Cache Line Size
+0x0D    Latency Timer
+0x0E    Header Type
+0x0F    BIST
+0x10    Base Address Register 0 (BAR0)
+0x14    Base Address Register 1 (BAR1)
+...     ...
+0x2C    Subsystem Vendor ID
+0x2E    Subsystem Device ID
+0x3C    Interrupt Line
+0x3D    Interrupt Pin
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:212-279`
+
+#### PCI Addressing
+
+PCI devices are identified by:
+```c
+struct pci_address {
+    __u32 domain;      // Domain (segment)
+    __u8 bus;          // Bus number (0-255)
+    __u8 devid;        // Device number (0-31)
+    __u8 function;     // Function number (0-7)
+};
+```
+
+**Format:** `domain:bus:device.function` (e.g., `0000:00:1f.0`)
+
+### PCI Device Discovery
+
+#### x86_64 (Port-Mapped I/O)
+
+On x86, PCI configuration is accessed via I/O ports:
+
+```c
+#define PCI_CONFIG_ADDR  0xCF8  // Configuration address port
+#define PCI_CONFIG_DATA  0xCFC  // Configuration data port
+```
+
+The driver scans all possible bus/device/function combinations:
+- 256 buses (8-bit)
+- 32 devices per bus (5-bit)  
+- 8 functions per device (3-bit)
+
+```c
+for (bus = 0; bus < PCI_MAX_BUSES; bus++) {
+    for (dev = 0; dev < PCI_MAX_DEVICES; dev++) {
+        for (func = 0; func < PCI_MAX_FUNCTIONS; func++) {
+            // Read vendor ID
+            uint16_t vendor = pci_config_read(bus, dev, func, 0x00);
+            if (vendor != PCI_INVALID_ID) {
+                // Valid device found
+                register_pci_device(bus, dev, func);
+            }
+        }
+    }
+}
+```
+
+#### ARM64 (ECAM - Enhanced Configuration Access Mechanism)
+
+On ARM64, PCI uses memory-mapped ECAM:
+
+```kconfig
+CONFIG_LIBUKBUS_PCI_ECAM=y
+CONFIG_LIBUKBUS_PLATFORM=y
+```
+
+**Device Tree:**
+```dts
+pcie@10000000 {
+    compatible = "pci-host-ecam-generic";
+    device_type = "pci";
+    #address-cells = <3>;
+    #size-cells = <2>;
+    reg = <0x0 0x10000000 0x0 0x10000000>;  /* ECAM space */
+    ranges = <0x02000000 0x0 0x40000000     /* Memory space */
+              0x0 0x40000000 0x0 0x40000000>;
+    bus-range = <0x00 0xff>;
+};
+```
+
+ECAM maps configuration space to memory:
+```
+Address = ECAM_BASE + (bus << 20) + (device << 15) + (function << 12) + offset
+```
+
+**Source:** `drivers/ukbus/pci/pci_ecam.c`
+
+### PCI Driver Registration
+
+Drivers register with the PCI bus using device ID tables:
+
+```c
+#include <uk/bus/pci.h>
+
+// Define supported devices
+static struct pci_device_id device_ids[] = {
+    {
+        PCI_DEVICE_ID(0x1AF4, 0x1001),  // VirtIO net (transitional)
+    },
+    {
+        PCI_DEVICE_ID(0x1AF4, 0x1041),  // VirtIO net (modern)
+    },
+    { PCI_ANY_DEVICE_ID }  // Terminator
+};
+
+// Driver callbacks
+static int my_pci_add_dev(struct pci_device *pci_dev)
+{
+    uk_pr_info("PCI device added: %04x:%04x\n",
+               pci_dev->id.vendor_id,
+               pci_dev->id.device_id);
+    
+    // Initialize device
+    return 0;
+}
+
+static int my_pci_drv_init(struct uk_alloc *a)
+{
+    // Driver initialization
+    return 0;
+}
+
+// Define driver
+static struct pci_driver my_driver = {
+    .device_ids = device_ids,
+    .init = my_pci_drv_init,
+    .add_dev = my_pci_add_dev,
+};
+
+// Register driver
+PCI_REGISTER_DRIVER(&my_driver);
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:140-179`
+
+### PCI Device Operations
+
+#### Configuration Space Access
+
+```c
+// Read from configuration space
+uint32_t pci_config_read(struct pci_device *dev, 
+                         uint8_t offset, 
+                         size_t size);
+
+// Write to configuration space  
+void pci_config_write(struct pci_device *dev,
+                      uint8_t offset,
+                      uint32_t value,
+                      size_t size);
+```
+
+#### Enable Device
+
+```c
+// Enable bus mastering (DMA)
+uint16_t command = pci_config_read(dev, PCI_COMMAND, 2);
+command |= PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY;
+pci_config_write(dev, PCI_COMMAND, command, 2);
+```
+
+**Command register bits:**
+```c
+#define PCI_COMMAND_IO         0x1    // Enable I/O space
+#define PCI_COMMAND_MEMORY     0x2    // Enable memory space
+#define PCI_COMMAND_MASTER     0x4    // Enable bus mastering
+#define PCI_COMMAND_INTX_DISABLE 0x400 // Disable INTx interrupts
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:281-293`
+
+#### Base Address Registers (BARs)
+
+```c
+// Read BAR
+unsigned long bar = pci_config_read(dev, PCI_BASE_ADDRESS_0, 4);
+
+// Check if I/O or memory
+if (bar & 0x1) {
+    // I/O space BAR
+    unsigned long io_addr = bar & PCI_CONF_IOBAR_MASK;
+} else {
+    // Memory space BAR
+    unsigned long mem_addr = bar & ~0xF;
+}
+```
+
+**BAR locations:**
+```c
+#define PCI_BASE_ADDRESS_0  0x10
+#define PCI_BASE_ADDRESS_1  0x14
+#define PCI_BASE_ADDRESS_2  0x18
+#define PCI_BASE_ADDRESS_3  0x1c
+#define PCI_BASE_ADDRESS_4  0x20
+#define PCI_BASE_ADDRESS_5  0x24
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:253-258`
+
+#### Interrupt Configuration
+
+```c
+// Read interrupt line
+uint8_t irq = pci_config_read(dev, PCI_INTERRUPT_LINE, 1);
+
+// Read interrupt pin (1=INTA, 2=INTB, 3=INTC, 4=INTD)
+uint8_t pin = pci_config_read(dev, PCI_INTERRUPT_PIN, 1);
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:296-298`
+
+### PCI Device Structure
+
+```c
+struct pci_device {
+    struct uk_list_head list;
+    struct pci_device_id id;        // Vendor/Device IDs
+    struct pci_address addr;        // Bus/Dev/Func
+    struct pci_driver *drv;         // Associated driver
+    enum pci_device_state state;    // Device state
+    unsigned long base;             // BAR0 address
+    unsigned long irq;              // Interrupt line
+};
+```
+
+**Source reference:** `drivers/ukbus/pci/include/uk/bus/pci.h:153-162`
+
+### QEMU PCI Examples
+
+**Add PCI devices:**
+```bash
+qemu-system-x86_64 \
+    -device virtio-net-pci,netdev=net0 \
+    -device virtio-blk-pci,drive=hd0 \
+    -device virtio-9p-pci,fsdev=fs0,mount_tag=hostshare
+```
+
+**List PCI devices in QEMU monitor:**
+```
+(qemu) info pci
+  Bus  0, device   0, function 0:
+    Host bridge: PCI device 8086:1237
+  Bus  0, device   1, function 0:
+    VGA controller: PCI device 1234:1111
+  Bus  0, device   2, function 0:
+    Ethernet controller: PCI device 1af4:1000
+```
+
+**Source:** `drivers/ukbus/pci/`
+
+## Platform Bus Driver
+
+The platform bus (`libukbus_platform`) handles non-auto-discoverable devices described in device trees (FDT).
+
+### Configuration
+
+```kconfig
+CONFIG_LIBUKBUS_PLATFORM=y
+CONFIG_LIBUKBUS=y
+CONFIG_LIBFDT=y                # Flattened Device Tree support
+CONFIG_LIBUKOFW=y              # Open Firmware wrapper
+```
+
+### Platform Device Discovery
+
+Devices are discovered from Flattened Device Tree (FDT):
+
+```dts
+/ {
+    soc {
+        serial@09000000 {
+            compatible = "arm,pl011", "arm,primecell";
+            reg = <0x09000000 0x1000>;
+            interrupts = <33>;
+            clock-names = "uartclk", "apb_pclk";
+        };
+        
+        virtio@a000000 {
+            compatible = "virtio,mmio";
+            reg = <0x0a000000 0x200>;
+            interrupts = <16>;
+        };
+    };
+};
+```
+
+The platform bus scans the device tree and creates platform devices for each node.
+
+### Platform Device IDs
+
+Platform devices are identified by compatible strings and numeric IDs:
+
+```c
+struct pf_device_id {
+    __u16 device_id;
+};
+
+// Predefined IDs
+#define PLATFORM_DEVICE_ID_START  0x100
+#define VIRTIO_MMIO_ID           (PLATFORM_DEVICE_ID_START)
+#define GEN_PCI_ID               (PLATFORM_DEVICE_ID_START + 1)
+#define PL031_RTC_ID             (PLATFORM_DEVICE_ID_START + 2)
+```
+
+**Source reference:** `drivers/ukbus/platform/include/uk/bus/platform.h:47-52`
+
+### Device Matching Table
+
+Drivers provide a matching table to map compatible strings to device IDs:
+
+```c
+struct device_match_table {
+    const char *compatible;       // Device tree compatible string
+    struct pf_device_id *id;     // Driver device ID
+};
+```
+
+### Platform Driver Registration
+
+```c
+#include <uk/bus/platform.h>
+
+// Define device IDs
+static struct pf_device_id virtio_mmio_ids[] = {
+    { VIRTIO_MMIO_ID },
+    { /* END */ }
+};
+
+// Driver callbacks
+static int virtio_mmio_probe(struct pf_device *pf_dev)
+{
+    uk_pr_info("Probing MMIO device at 0x%lx\n", pf_dev->base);
+    return 0;
+}
+
+static int virtio_mmio_add_dev(struct pf_device *pf_dev)
+{
+    uk_pr_info("Adding MMIO device\n");
+    
+    // Map device registers
+    void *regs = (void *)pf_dev->base;
+    
+    // Initialize device
+    return 0;
+}
+
+static int virtio_mmio_match(const char *compatible)
+{
+    return !strcmp(compatible, "virtio,mmio");
+}
+
+// Define driver
+static struct pf_driver virtio_mmio_drv = {
+    .device_ids = virtio_mmio_ids,
+    .probe = virtio_mmio_probe,
+    .add_dev = virtio_mmio_add_dev,
+    .match = virtio_mmio_match,
+};
+
+// Register driver
+PF_REGISTER_DRIVER(&virtio_mmio_drv);
+```
+
+**Source reference:** `drivers/ukbus/platform/include/uk/bus/platform.h:72-128`
+
+### Platform Device Structure
+
+```c
+struct pf_device {
+    UK_TAILQ_ENTRY(struct pf_device) next;
+    struct pf_device_id id;          // Device ID
+    struct pf_driver *drv;           // Associated driver
+    enum pf_device_state state;      // Device state
+    int fdt_offset;                  // FDT node offset
+    __u64 base;                      // Register base address
+    __sz size;                       // Register region size
+    unsigned long irq;               // Interrupt number
+};
+```
+
+**Source reference:** `drivers/ukbus/platform/include/uk/bus/platform.h:87-97`
+
+### Device Memory Mapping
+
+With paging enabled, device memory must be mapped:
+
+```c
+#if CONFIG_PAGING
+#include <uk/bus/platform.h>
+
+// Map device registers
+__vaddr_t vaddr = uk_bus_pf_devmap(pf_dev->base, pf_dev->size);
+if (vaddr == __VADDR_INV) {
+    uk_pr_err("Failed to map device memory\n");
+    return -ENOMEM;
+}
+
+// Access device registers
+volatile uint32_t *regs = (uint32_t *)vaddr;
+#else
+// Direct access without paging
+volatile uint32_t *regs = (uint32_t *)pf_dev->base;
+#endif
+```
+
+**Source reference:** `drivers/ukbus/platform/include/uk/bus/platform.h:100-112`
+
+### FDT Parsing
+
+Access device tree properties:
+
+```c
+#include <libfdt.h>
+#include <uk/ofw/fdt.h>
+
+// Get property
+const void *prop = fdt_getprop(fdt, pf_dev->fdt_offset, "reg", &len);
+
+// Parse reg property (address/size pairs)
+const fdt32_t *reg = prop;
+uint64_t addr = fdt32_to_cpu(reg[0]);
+uint64_t size = fdt32_to_cpu(reg[1]);
+
+// Get string property
+const char *name = fdt_getprop(fdt, pf_dev->fdt_offset, "label", NULL);
+```
+
+### QEMU Platform Device Examples
+
+**ARM64 virt machine:**
+```bash
+qemu-system-aarch64 \
+    -machine virt \
+    -dtb virt.dtb \  # Custom device tree (optional)
+    -kernel unikernel.elf
+```
+
+**Dump device tree:**
+```bash
+qemu-system-aarch64 \
+    -machine virt,dumpdtb=virt.dtb \
+    -kernel /dev/null
+
+dtc -I dtb -O dts virt.dtb > virt.dts
+```
+
+**Source:** `drivers/ukbus/platform/`
+
+## Bus Initialization Order
+
+Buses initialize in this sequence:
+
+1. **libukbus initialization** - Register bus abstraction
+2. **PCI bus registration** - Scan PCI devices (if enabled)
+3. **Platform bus registration** - Parse FDT and create devices
+4. **Driver registration** - Drivers register with buses
+5. **Device probing** - Match devices to drivers and probe
+
+This is controlled by constructor priorities:
+```c
+UK_CTOR_PRIO(bus_init, UK_PRIO_EARLIEST)           // Bus framework
+UK_CTOR_PRIO(pci_bus_init, UK_BUS_REGISTER_PRIO)   // PCI bus
+UK_CTOR_PRIO(pf_bus_init, UK_BUS_REGISTER_PRIO)    // Platform bus
+UK_CTOR_PRIO(driver_init, UK_PRIO_AFTER(UK_BUS_REGISTER_PRIO))  // Drivers
+```
+
+## Configuration Summary
+
+### PCI Bus (x86_64)
+
+```kconfig
+CONFIG_ARCH_X86_64=y
+CONFIG_HAVE_PCI=y
+CONFIG_LIBUKBUS=y
+CONFIG_LIBUKBUS_PCI=y
+```
+
+### PCI Bus (ARM64 with ECAM)
+
+```kconfig
+CONFIG_ARCH_ARM_64=y
+CONFIG_HAVE_PCI=y
+CONFIG_LIBUKBUS=y
+CONFIG_LIBUKBUS_PCI=y
+CONFIG_LIBUKBUS_PCI_ECAM=y
+CONFIG_LIBUKBUS_PLATFORM=y     # ECAM needs platform bus
+CONFIG_LIBFDT=y
+CONFIG_LIBUKOFW=y
+```
+
+### Platform Bus
+
+```kconfig
+CONFIG_LIBUKBUS=y
+CONFIG_LIBUKBUS_PLATFORM=y
+CONFIG_LIBFDT=y                # Device tree support
+CONFIG_LIBUKOFW=y              # Open Firmware API
+```
+
+### Both PCI and Platform
+
+```kconfig
+CONFIG_LIBUKBUS=y
+CONFIG_LIBUKBUS_PCI=y
+CONFIG_LIBUKBUS_PLATFORM=y
+CONFIG_LIBFDT=y
+CONFIG_LIBUKOFW=y
+```
+
+## Debugging Bus Issues
+
+### Enable Debug Output
+
+```kconfig
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTK_INFO=y
+CONFIG_LIBUKDEBUG_PRINTK_DEBUG=y
+```
+
+### PCI Debugging
+
+Check PCI device discovery:
+```c
+uk_pr_info("PCI: Scanning bus %d\n", bus);
+uk_pr_debug("PCI: Found device %04x:%04x at %02x:%02x.%x\n",
+            vendor, device, bus, dev, func);
+```
+
+List all PCI devices in QEMU monitor:
+```
+(qemu) info pci
+```
+
+### Platform Bus Debugging
+
+Check FDT parsing:
+```c
+uk_pr_info("Platform: Found device '%s' at 0x%lx\n", 
+           compatible, base_addr);
+uk_pr_debug("Platform: Device IRQ: %lu, size: 0x%lx\n",
+            irq, size);
+```
+
+Dump device tree:
+```bash
+dtc -I dtb -O dts <dtb-file>
+```
+
+## Source Code Reference
+
+Bus driver locations:
+
+```
+drivers/ukbus/
+├── pci/
+│   ├── Config.uk              # PCI configuration
+│   ├── Makefile.uk            # Build rules
+│   ├── pci_bus.c              # PCI bus driver
+│   ├── pci_ecam.c             # ECAM support
+│   ├── pci_ecam.h             # ECAM definitions
+│   └── include/uk/bus/
+│       └── pci.h              # PCI API
+└── platform/
+    ├── Config.uk              # Platform bus configuration
+    ├── Makefile.uk            # Build rules
+    ├── platform_bus.c         # Platform bus driver
+    └── include/uk/bus/
+        └── platform.h         # Platform bus API
+```
+
+## References
+
+- PCI Local Bus Specification: https://pcisig.com/specifications
+- PCI Express Base Specification: https://pcisig.com/specifications
+- Device Tree Specification: https://www.devicetree.org/specifications/
+- ARM SBSA (Server Base System Architecture): https://developer.arm.com/documentation/
+- Source: `drivers/ukbus/` in Unikraft repository

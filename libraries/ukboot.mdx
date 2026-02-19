@@ -1,0 +1,335 @@
+---
+title: ukboot - Boot and Initialization
+description: Boot library for Unikraft system initialization and startup sequence
+---
+
+The `ukboot` library is responsible for bootstrapping Unikraft unikernels. It orchestrates the initialization sequence, sets up memory allocators, initializes schedulers, and manages the transition from platform code to application execution.
+
+## Overview
+
+`ukboot` provides:
+- **Boot entry point** - Main entry from platform code
+- **Initialization sequence** - Coordinated startup of all subsystems
+- **Memory allocator setup** - Configuration and initialization of heap allocators
+- **Scheduler initialization** - Setup of thread scheduling
+- **Banner display** - Customizable boot banners
+- **Shutdown management** - Graceful shutdown handling
+
+## Key APIs
+
+### Boot Functions
+
+```c
+void uk_boot_entry(void) __noreturn;
+```
+
+Main boot entry point called by platform libraries after early initialization. This function:
+- Initializes the memory allocator
+- Sets up the scheduler (if configured)
+- Runs library constructors
+- Executes the application's `main()` function
+- Handles shutdown
+
+**Location**: `lib/ukboot/include/uk/boot.h:39`
+
+---
+
+```c
+void uk_boot_early_init(struct ukplat_bootinfo *bi);
+```
+
+Executes the early initialization boot stage. This function processes the `earlytab` section where libraries register early initialization callbacks.
+
+<ParamField path="bi" type="struct ukplat_bootinfo *">
+  Pointer to the bootinfo structure containing platform information
+</ParamField>
+
+**Location**: `lib/ukboot/include/uk/boot.h:27`
+
+---
+
+```c
+int uk_boot_shutdown_req(enum ukplat_gstate target);
+```
+
+Requests the init thread to perform a shutdown. Only available when `CONFIG_LIBUKBOOT_MAINTHREAD` is enabled.
+
+<ParamField path="target" type="enum ukplat_gstate">
+  Shutdown action to perform:
+  - `UKPLAT_HALT` - Terminate/Halt/Power-off
+  - `UKPLAT_RESTART` - Restart/Reboot
+  - `UKPLAT_CRASH` - Indicate a crash
+</ParamField>
+
+**Returns**:
+- `0` - Success, shutdown is requested
+- `1` - A shutdown is already in progress (request ignored)
+- `-ENOTSUP` - Shutdown requests are not supported
+- `-EINVAL` - Unsupported shutdown target
+
+**Location**: `lib/ukboot/include/uk/boot.h:57`
+
+### Early Initialization Table
+
+```c
+typedef int (*earlytab_func_t)(struct ukplat_bootinfo *bi);
+```
+
+Function type for early initialization callbacks.
+
+---
+
+```c
+UK_BOOT_EARLYTAB_ENTRY(init_fn, prio)
+```
+
+Register a function to execute during early initialization.
+
+<ParamField path="init_fn" type="earlytab_func_t">
+  Early init function to register. Must match the signature:
+  `int init_fn(struct ukplat_bootinfo *bi)`
+</ParamField>
+
+<ParamField path="prio" type="int">
+  Priority to execute the function at (lower numbers run first)
+</ParamField>
+
+**Location**: `lib/ukboot/include/uk/boot/earlytab.h:45`
+
+**Example**:
+```c
+static int my_early_init(struct ukplat_bootinfo *bi)
+{
+    // Perform early initialization
+    return 0;
+}
+
+UK_BOOT_EARLYTAB_ENTRY(my_early_init, 10);
+```
+
+## Configuration Options
+
+### Banner Options
+
+Configure the boot banner displayed at startup:
+
+```kconfig
+choice LIBUKBOOT_BANNER
+    prompt "Unikraft banner"
+    default LIBUKBOOT_BANNER_POWEREDBY
+```
+
+Available banner styles:
+- `LIBUKBOOT_BANNER_NONE` - No banner
+- `LIBUKBOOT_BANNER_MINIMAL` - One line banner
+- `LIBUKBOOT_BANNER_CLASSIC` - Classic banner
+- `LIBUKBOOT_BANNER_POWEREDBY` - "Powered by Unikraft" banner
+- `LIBUKBOOT_BANNER_POWEREDBY_ANSI` - ANSI colored banner (blue)
+- `LIBUKBOOT_BANNER_POWEREDBY_U8` - UTF-8 banner
+- `LIBUKBOOT_BANNER_POWEREDBY_U8ANSI` - UTF-8 with ANSI colors
+
+### Command Line Arguments
+
+```kconfig
+config LIBUKBOOT_CMDLINE_MAX_LEN
+    int "Maximum command line length"
+    default 4096
+```
+
+Maximum length of the command line string.
+
+```kconfig
+config LIBUKBOOT_MAXNBARGS
+    int "Maximum number of arguments"
+    default 60
+```
+
+Maximum size of the `argv` array.
+
+### Memory Allocator Selection
+
+```kconfig
+choice
+    prompt "Initialize memory allocator"
+    default LIBUKBOOT_INITBBUDDY
+```
+
+Choose which memory allocator to initialize:
+
+- `LIBUKBOOT_INITBBUDDY` - Binary buddy allocator (default)
+- `LIBUKBOOT_INITREGION` - Region allocator (fast, no free support)
+- `LIBUKBOOT_INITMIMALLOC` - Mimalloc allocator
+- `LIBUKBOOT_INITTINYALLOC` - Tiny allocator
+- `LIBUKBOOT_INITTLSF` - TLSF allocator
+- `LIBUKBOOT_INITNOALLOC` - No allocator
+
+```kconfig
+config LIBUKBOOT_HEAP_BASE
+    hex "Heap base address"
+    default 0x400000000
+    depends on HAVE_PAGING
+```
+
+Base virtual address for the heap when paging is enabled.
+
+### Scheduler Initialization
+
+```kconfig
+choice
+    prompt "Initialize scheduler"
+    default LIBUKBOOT_INITSCHEDCOOP
+    depends on LIBUKBOOT_INITALLOC
+```
+
+Choose which scheduler to initialize:
+
+- `LIBUKBOOT_INITSCHEDCOOP` - Cooperative scheduler
+- `LIBUKBOOT_INITNOSCHED` - No scheduler
+
+### Main Thread Options
+
+```kconfig
+config LIBUKBOOT_MAINTHREAD
+    bool "Run application main in own thread"
+    depends on LIBUKBOOT_INITSCHED && LIBUKBOOT_INITALLOC
+```
+
+Execute `main()` in a separate thread instead of the init context. This enables:
+- Proceeding with shutdown before main returns
+- Handling shutdown requests from drivers
+
+```kconfig
+config LIBUKBOOT_MAINTHREAD_NOHALT
+    bool "Do not initiate shutdown when application main returned"
+    depends on LIBUKBOOT_MAINTHREAD
+```
+
+Disable automatic shutdown when main returns. The system only shuts down on explicit requests.
+
+### Init Process Support
+
+```kconfig
+config LIBUKBOOT_INIT
+    bool "Provide /sbin/init logic"
+    depends on LIBPOSIX_PROCESS_MULTIPROCESS
+```
+
+Provides `/sbin/init` logic to handle orphan processes and manage shutdown in multiprocess configurations.
+
+### Graceful Shutdown
+
+```kconfig
+menuconfig LIBUKBOOT_GRACEFUL_SHUTDOWN
+    bool "Graceful shutdown"
+    depends on LIBUKBOOT_INIT
+```
+
+Signal the application on system shutdown to allow graceful termination.
+
+```kconfig
+config LIBUKBOOT_GRACEFUL_SHUTDOWN_SIGNAL
+    int "Termination signal"
+    default 15
+```
+
+Signal to send for graceful termination (default is SIGTERM).
+
+```kconfig
+config LIBUKBOOT_GRACEFUL_SHUTDOWN_TIMEOUT
+    int "Termination timeout (msec)"
+    default 5000
+```
+
+Time in milliseconds to wait for graceful termination before force-killing processes.
+
+## Boot Sequence
+
+The typical Unikraft boot sequence:
+
+1. **Platform Early Init** - Platform-specific hardware initialization
+2. **Early Init Table** - Execute callbacks registered via `UK_BOOT_EARLYTAB_ENTRY`
+3. **Boot Entry** (`uk_boot_entry`)
+   - Display banner
+   - Initialize heap allocator
+   - Initialize stack allocator
+   - Initialize scheduler (if configured)
+   - Run library constructors (`uk_ctors_run`)
+   - Run init table (`uk_init_run`)
+4. **Main Execution**
+   - Create main thread (if `LIBUKBOOT_MAINTHREAD`)
+   - Execute application `main()`
+5. **Shutdown**
+   - Execute shutdown handlers
+   - Perform cleanup
+   - Halt or reboot system
+
+## Usage Example
+
+### Registering Early Initialization
+
+```c
+#include <uk/boot/earlytab.h>
+#include <uk/plat/common/bootinfo.h>
+
+static int my_driver_early_init(struct ukplat_bootinfo *bi)
+{
+    uk_pr_info("My driver early init\n");
+    
+    // Access boot information
+    uk_pr_info("Command line: %s\n", bi->cmdline);
+    
+    return 0;
+}
+
+UK_BOOT_EARLYTAB_ENTRY(my_driver_early_init, 5);
+```
+
+### Requesting Shutdown
+
+```c
+#include <uk/boot.h>
+
+void emergency_handler(void)
+{
+    int ret;
+    
+    ret = uk_boot_shutdown_req(UKPLAT_HALT);
+    if (ret < 0) {
+        uk_pr_err("Failed to request shutdown: %d\n", ret);
+    }
+}
+```
+
+### Custom Main Thread
+
+When using `LIBUKBOOT_MAINTHREAD`, your application's `main()` runs in a separate thread:
+
+```c
+int main(int argc, char *argv[])
+{
+    // This runs in a dedicated thread
+    uk_pr_info("Application starting\n");
+    
+    // Can return early while other threads continue
+    return 0;
+}
+```
+
+## Dependencies
+
+`ukboot` depends on:
+- `LIBNOLIBC` - Minimal C library (if no libc is available)
+- `LIBUKDEBUG` - Debugging utilities
+- `LIBUKARGPARSE` - Argument parsing
+
+Additional dependencies based on configuration:
+- `LIBUKALLOCBBUDDY` - For binary buddy allocator
+- `LIBUKALLOCREGION` - For region allocator
+- `LIBUKSCHEDCOOP` - For cooperative scheduler
+- `LIBUKALLOCSTACK` - For stack allocation
+
+## See Also
+
+- [ukalloc - Memory Allocation](/libraries/ukalloc)
+- [uksched - Scheduling](/libraries/uksched)
+- [ukdebug - Debugging](/libraries/ukdebug)

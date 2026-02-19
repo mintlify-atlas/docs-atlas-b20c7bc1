@@ -1,0 +1,650 @@
+---
+title: virtio
+description: VirtIO library for paravirtualized devices
+---
+
+## Overview
+
+The VirtIO library in Unikraft provides a common abstraction layer for implementing paravirtualized device drivers. VirtIO is a standardized interface for virtual devices, commonly used in hypervisors like KVM, QEMU, and Xen. This library implements the VirtIO specification's core components including the bus interface, virtqueue management, and device lifecycle.
+
+The library is split into multiple components:
+- **virtio-bus** - Device registration and management
+- **virtio-ring** - Low-level virtqueue ring operations
+- **virtqueue** - High-level queue operations and buffer management
+
+## Architecture
+
+### Device States
+
+VirtIO devices progress through the following states:
+
+```c
+enum virtio_dev_status {
+    VIRTIO_DEV_RESET,        // Device reset
+    VIRTIO_DEV_INITIALIZED,  // Acknowledged and ready to configure
+    VIRTIO_DEV_CONFIGURED,   // Features negotiated, ready to start
+    VIRTIO_DEV_RUNNING,      // Device running
+    VIRTIO_DEV_STOPPED       // Device stopped
+};
+```
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:68`
+
+### Core Structures
+
+#### virtio_dev
+```c
+struct virtio_dev {
+    __u64 features;                      // Feature bitmap
+    UK_TAILQ_HEAD(virtqueue_head) vqs;  // List of virtqueues
+    void *priv;                          // Driver private data
+    struct virtio_dev_id id;            // Device identifier
+    struct virtio_config_ops *cops;     // Configuration operations
+    struct virtio_driver *vdrv;         // Associated driver
+    enum virtio_dev_status status;      // Current state
+};
+```
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:136`
+
+#### virtqueue
+```c
+struct virtqueue {
+    struct virtio_dev *vdev;            // Parent device
+    __u16 queue_id;                     // Queue identifier
+    virtqueue_notify_host_t vq_notify_host; // Host notification
+    virtqueue_callback_t vq_callback;   // Interrupt callback
+    UK_TAILQ_ENTRY(struct virtqueue) next;
+    void *priv;                         // Queue private data
+};
+```
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:58`
+
+## Device Management
+
+### Device Registration
+
+#### virtio_bus_register_device
+```c
+int virtio_bus_register_device(struct virtio_dev *vdev);
+```
+Registers a VirtIO device with the bus. The bus will match the device with an appropriate driver and call the driver's `add_dev` function.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:156`
+
+### Device Status Operations
+
+#### virtio_dev_reset
+```c
+static inline int virtio_dev_reset(struct virtio_dev *vdev);
+```
+Resets the VirtIO device to its initial state.
+
+**Returns:**
+- `0` - Success
+- `-ENOTSUP` - Operation not supported
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:167`
+
+#### virtio_dev_status_get
+```c
+static inline __u8 virtio_dev_status_get(struct virtio_dev *vdev);
+```
+Returns the current device status bits.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:189`
+
+#### virtio_dev_status_update
+```c
+static inline int virtio_dev_status_update(struct virtio_dev *vdev,
+                                           __u8 status);
+```
+Updates the device status register.
+
+**Returns:**
+- `0` - Success
+- `-ENOTSUP` - Operation not supported
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:209`
+
+#### virtio_dev_drv_up
+```c
+static inline void virtio_dev_drv_up(struct virtio_dev *vdev);
+```
+Convenience function to set all status bits indicating the driver is ready and the device can be used.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:364`
+
+### Feature Negotiation
+
+#### virtio_feature_get
+```c
+static inline __u64 virtio_feature_get(struct virtio_dev *vdev);
+```
+Gets the feature bitmap supported by the device.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:230`
+
+#### virtio_feature_set
+```c
+static inline void virtio_feature_set(struct virtio_dev *vdev);
+```
+Writes the negotiated features back to the device after the driver has modified `vdev->features`.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:246`
+
+**Feature macros:**
+```c
+// Set a feature bit
+VIRTIO_FEATURE_SET(features, bitpos)
+
+// Clear a feature bit
+VIRTIO_FEATURE_CLEAR(features, bitpos)
+
+// Test if feature is present
+VIRTIO_FEATURE_HAS(features, bitpos)
+```
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:51-62`
+
+### Configuration Space Access
+
+#### virtio_config_get
+```c
+static inline int virtio_config_get(struct virtio_dev *vdev, __u16 offset,
+                                    void *buf, __u32 len, __u8 type_len);
+```
+Reads configuration data from the device configuration space.
+
+**Parameters:**
+- `vdev` - VirtIO device
+- `offset` - Offset into configuration space
+- `buf` - Buffer to store data
+- `len` - Buffer length
+- `type_len` - Data type length for proper endianness handling
+
+**Returns:**
+- `>=0` - Success
+- `<0` - Error code
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:270`
+
+## Virtqueue Management
+
+### Queue Discovery and Setup
+
+#### virtio_find_vqs
+```c
+static inline int virtio_find_vqs(struct virtio_dev *vdev, __u16 total_vqs,
+                                  __u16 *vq_size);
+```
+Discovers available virtqueues on the device.
+
+**Parameters:**
+- `vdev` - VirtIO device
+- `total_vqs` - Number of queues requested
+- `vq_size` - Array to store maximum descriptors for each queue
+
+**Returns:**
+- `>=0` - Number of available virtqueues
+- `-ENOTSUP` - Operation not supported
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:297`
+
+#### virtio_vqueue_setup
+```c
+static inline struct virtqueue *
+virtio_vqueue_setup(struct virtio_dev *vdev, __u16 vq_id, __u16 nr_desc,
+                    virtqueue_callback_t callback, struct uk_alloc *a);
+```
+Sets up an individual virtqueue.
+
+**Parameters:**
+- `vdev` - VirtIO device
+- `vq_id` - Queue identifier
+- `nr_desc` - Number of descriptors
+- `callback` - Interrupt callback function
+- `a` - Memory allocator
+
+**Returns:**
+- Pointer to virtqueue on success
+- `-ENOTSUP` - Operation not supported
+- `-ENOMEM` - Memory allocation failed
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:330`
+
+#### virtio_vqueue_release
+```c
+static inline void virtio_vqueue_release(struct virtio_dev *vdev,
+                                        struct virtqueue *vq,
+                                        struct uk_alloc *a);
+```
+Releases a virtqueue and frees its resources.
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:354`
+
+### Low-Level Queue Operations
+
+#### virtqueue_create
+```c
+struct virtqueue *virtqueue_create(__u16 queue_id, __u16 nr_descs,
+                                   __u16 align,
+                                   virtqueue_callback_t callback,
+                                   virtqueue_notify_host_t notify,
+                                   struct virtio_dev *vdev,
+                                   struct uk_alloc *a);
+```
+Creates a new virtqueue with the specified parameters.
+
+**Returns:**
+- Pointer to virtqueue on success
+- `-ENOMEM` - Allocation failed
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:206`
+
+#### virtqueue_destroy
+```c
+void virtqueue_destroy(struct virtqueue *vq, struct uk_alloc *a);
+```
+Destroys a virtqueue and releases all associated memory.
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:238`
+
+### Buffer Operations
+
+#### virtqueue_buffer_enqueue
+```c
+int virtqueue_buffer_enqueue(struct virtqueue *vq, void *cookie,
+                             struct uk_sglist *sg,
+                             __u16 read_bufs, __u16 write_bufs);
+```
+Enqueues buffers to the virtqueue for processing by the device.
+
+**Parameters:**
+- `vq` - Virtqueue
+- `cookie` - User data to identify this request
+- `sg` - Scatter-gather list describing buffers
+- `read_bufs` - Number of device-readable buffers
+- `write_bufs` - Number of device-writable buffers
+
+**Returns:**
+- `>0` - Buffers enqueued, value indicates available slots
+- `0` - Buffers enqueued, no more slots available
+- `<0` - Failed to enqueue
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:180`
+
+**Example:**
+```c
+struct uk_sglist sg;
+struct uk_sglist_seg segs[2];
+int ret;
+
+// Setup scatter-gather list
+uk_sglist_init(&sg, 2, segs);
+uk_sglist_append(&sg, header, sizeof(*header));
+uk_sglist_append(&sg, data, data_len);
+
+// Enqueue: 1 read buffer (header), 1 write buffer (data)
+ret = virtqueue_buffer_enqueue(vq, request_cookie, &sg, 1, 1);
+if (ret >= 0) {
+    // Buffer enqueued successfully
+    virtqueue_host_notify(vq);  // Kick the device
+}
+```
+
+#### virtqueue_buffer_dequeue
+```c
+int virtqueue_buffer_dequeue(struct virtqueue *vq, void **cookie,
+                             __u32 *len);
+```
+Dequeues a completed buffer from the virtqueue.
+
+**Parameters:**
+- `vq` - Virtqueue
+- `cookie` - Output: user data associated with dequeued buffer
+- `len` - Output: length of data written by device
+
+**Returns:**
+- `>=0` - Buffer dequeued, value indicates remaining used slots
+- `<0` - No buffer available or error
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:156`
+
+### Queue State
+
+#### virtqueue_is_full
+```c
+int virtqueue_is_full(struct virtqueue *vq);
+```
+Checks if the virtqueue is full.
+
+**Returns:**
+- `1` - Queue is full
+- `0` - Queue has available space
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:219`
+
+#### virtqueue_hasdata
+```c
+int virtqueue_hasdata(struct virtqueue *vq);
+```
+Checks if the virtqueue has pending responses from the device.
+
+**Returns:**
+- `1` - Has data
+- `0` - No data
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:229`
+
+### Notifications and Interrupts
+
+#### virtqueue_host_notify
+```c
+void virtqueue_host_notify(struct virtqueue *vq);
+```
+Notifies the host/device that new buffers are available. This is often called a "kick" operation.
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:262`
+
+#### virtqueue_intr_enable / virtqueue_intr_disable
+```c
+int virtqueue_intr_enable(struct virtqueue *vq);
+void virtqueue_intr_disable(struct virtqueue *vq);
+```
+Enables or disables interrupts on the virtqueue.
+
+**Returns (enable):**
+- `0` - Interrupts enabled
+- `1` - More packets in ring, should process before enabling
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:255`, `drivers/virtio/include/virtio/virtqueue.h:245`
+
+#### virtqueue_ring_interrupt
+```c
+int virtqueue_ring_interrupt(void *obj);
+```
+Ring interrupt handler, typically called from device interrupt handler.
+
+**Returns:**
+- `0` - Interrupt not for this virtqueue
+- `1` - Virtqueue handled the interrupt
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:127`
+
+### Queue Properties
+
+#### virtqueue_physaddr
+```c
+__paddr_t virtqueue_physaddr(struct virtqueue *vq);
+```
+Returns the physical address of the descriptor ring.
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:81`
+
+#### virtqueue_get_avail_addr / virtqueue_get_used_addr
+```c
+__paddr_t virtqueue_get_avail_addr(struct virtqueue *vq);
+__paddr_t virtqueue_get_used_addr(struct virtqueue *vq);
+```
+Returns physical addresses of the available and used rings.
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:91`, `drivers/virtio/include/virtio/virtqueue.h:101`
+
+#### virtqueue_vring_get_num
+```c
+unsigned int virtqueue_vring_get_num(struct virtqueue *vq);
+```
+Returns the number of descriptors in the virtqueue.
+
+**Source:** `drivers/virtio/include/virtio/virtqueue.h:113`
+
+## VirtIO Ring Structures
+
+The VirtIO ring is the low-level data structure for communication between driver and device.
+
+### Ring Components
+
+#### Descriptor
+```c
+struct vring_desc {
+    __virtio_le64 addr;   // Guest-physical address
+    __virtio_le32 len;    // Length
+    __virtio_le16 flags;  // Descriptor flags
+    __virtio_le16 next;   // Next descriptor in chain
+};
+```
+
+**Flags:**
+- `VRING_DESC_F_NEXT` - Buffer continues via next field
+- `VRING_DESC_F_WRITE` - Buffer is write-only (device writes)
+- `VRING_DESC_F_INDIRECT` - Buffer contains list of descriptors
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:88`
+
+#### Available Ring
+```c
+struct vring_avail {
+    __virtio_le16 flags;
+    __virtio_le16 idx;
+    __virtio_le16 ring[];
+};
+```
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:99`
+
+#### Used Ring
+```c
+struct vring_used {
+    __virtio_le16 flags;
+    __virtio_le16 idx;
+    struct vring_used_elem ring[];
+};
+```
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:114`
+
+### Ring Helper Functions
+
+#### vring_init
+```c
+static inline void vring_init(struct vring *vr, unsigned int num,
+                             __u8 *p, unsigned long align);
+```
+Initializes a vring structure in the provided memory.
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:164`
+
+#### vring_size
+```c
+static inline unsigned int vring_size(unsigned int num,
+                                      unsigned long align);
+```
+Calculates the total size needed for a vring with the given number of descriptors.
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:176`
+
+## Driver Implementation
+
+### Registering a VirtIO Driver
+
+```c
+static struct virtio_dev_id my_dev_ids[] = {
+    {VIRTIO_ID_BLOCK},  // Example: block device
+    {VIRTIO_DEV_ID_INVALID}  // Terminator
+};
+
+static int my_driver_init(struct uk_alloc *a)
+{
+    // Initialize driver
+    return 0;
+}
+
+static int my_driver_add(struct virtio_dev *vdev)
+{
+    // Setup device
+    return 0;
+}
+
+static struct virtio_driver my_driver = {
+    .dev_ids = my_dev_ids,
+    .init = my_driver_init,
+    .add_dev = my_driver_add
+};
+
+VIRTIO_BUS_REGISTER_DRIVER(&my_driver);
+```
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h:122`, `drivers/virtio/bus/include/virtio/virtio_bus.h:374`
+
+### Complete Device Setup Example
+
+```c
+#include <virtio/virtio_bus.h>
+#include <virtio/virtqueue.h>
+#include <uk/sglist.h>
+
+static int my_vq_callback(struct virtqueue *vq, void *priv)
+{
+    void *cookie;
+    __u32 len;
+    int ret;
+    
+    // Process all completed buffers
+    while ((ret = virtqueue_buffer_dequeue(vq, &cookie, &len)) >= 0) {
+        struct my_request *req = cookie;
+        // Process completed request
+        handle_completion(req, len);
+    }
+    
+    return 1;  // Handled
+}
+
+static int setup_virtio_device(struct virtio_dev *vdev,
+                               struct uk_alloc *a)
+{
+    struct virtqueue *vq;
+    __u16 vq_size[1];
+    __u64 features;
+    int ret;
+    
+    // 1. Reset device
+    virtio_dev_reset(vdev);
+    
+    // 2. Set ACKNOWLEDGE and DRIVER status
+    virtio_dev_status_update(vdev,
+        VIRTIO_CONFIG_STATUS_ACK | VIRTIO_CONFIG_STATUS_DRIVER);
+    
+    // 3. Get and negotiate features
+    features = virtio_feature_get(vdev);
+    
+    // Request specific features
+    if (VIRTIO_FEATURE_HAS(features, VIRTIO_F_RING_INDIRECT_DESC)) {
+        vdev->features = features;  // Accept feature
+    } else {
+        VIRTIO_FEATURE_CLEAR(vdev->features,
+                            VIRTIO_F_RING_INDIRECT_DESC);
+    }
+    
+    // Write back negotiated features
+    virtio_feature_set(vdev);
+    virtio_dev_status_update(vdev, VIRTIO_CONFIG_STATUS_FEATURES_OK);
+    
+    // 4. Discover virtqueues
+    ret = virtio_find_vqs(vdev, 1, vq_size);
+    if (ret != 1) {
+        uk_pr_err("Failed to find virtqueues\n");
+        return -ENODEV;
+    }
+    
+    // 5. Setup virtqueue
+    vq = virtio_vqueue_setup(vdev, 0, vq_size[0],
+                             my_vq_callback, a);
+    if (PTRISERR(vq)) {
+        uk_pr_err("Failed to setup virtqueue\n");
+        return PTR2ERR(vq);
+    }
+    
+    // 6. Set device status to DRIVER_OK
+    virtio_dev_drv_up(vdev);
+    
+    // 7. Enable interrupts
+    virtqueue_intr_enable(vq);
+    
+    uk_pr_info("VirtIO device configured successfully\n");
+    return 0;
+}
+
+static int submit_virtio_request(struct virtqueue *vq,
+                                 struct my_request *req)
+{
+    struct uk_sglist sg;
+    struct uk_sglist_seg segs[3];
+    int ret;
+    
+    // Setup scatter-gather list
+    uk_sglist_init(&sg, 3, segs);
+    uk_sglist_append(&sg, &req->header, sizeof(req->header));
+    uk_sglist_append(&sg, req->data, req->data_len);
+    uk_sglist_append(&sg, &req->status, sizeof(req->status));
+    
+    // Enqueue: 2 read buffers, 1 write buffer
+    ret = virtqueue_buffer_enqueue(vq, req, &sg, 2, 1);
+    if (ret < 0) {
+        uk_pr_err("Failed to enqueue request\n");
+        return ret;
+    }
+    
+    // Notify device
+    virtqueue_host_notify(vq);
+    
+    return 0;
+}
+```
+
+## Feature Flags
+
+Common VirtIO feature flags:
+
+```c
+#define VIRTIO_F_INDIRECT_DESC    28  // Indirect descriptors
+#define VIRTIO_F_EVENT_IDX        29  // Event index support
+#define VIRTIO_F_ANY_LAYOUT       27  // Arbitrary descriptor layout
+```
+
+**Source:** `drivers/virtio/ring/include/virtio/virtio_ring.h:76-82`
+
+## Configuration Options
+
+The VirtIO library provides several configuration macros that can be used to customize behavior and optimize for specific use cases. These are typically set in the Unikraft configuration system.
+
+## Best Practices
+
+### Memory Ordering
+The VirtIO specification requires proper memory barriers. The library handles this automatically, but drivers should be aware:
+
+- Use appropriate barriers when accessing shared memory
+- The library uses little-endian format for all ring structures
+- Physical addresses must be guest-physical addresses
+
+### Buffer Management
+- Always use scatter-gather lists for complex buffer layouts
+- Keep track of cookie pointers to identify completed requests
+- Ensure buffers remain valid until completion callback
+
+### Interrupt Handling
+- Process all available completions in the callback
+- Re-enable interrupts after processing
+- Use `virtqueue_hasdata()` to check for more work
+
+### Queue Sizing
+- Query maximum queue size with `virtio_find_vqs()`
+- Power-of-two sizes are often more efficient
+- Consider memory constraints when sizing queues
+
+## See Also
+
+- [uknetdev](/libraries/uknetdev) - Network device API (uses VirtIO for virtio-net)
+- [ukblkdev](/libraries/ukblkdev) - Block device API (uses VirtIO for virtio-blk)
+- VirtIO Specification: https://docs.oasis-open.org/virtio/virtio/v1.1/virtio-v1.1.html

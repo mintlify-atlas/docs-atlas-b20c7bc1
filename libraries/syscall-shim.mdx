@@ -1,0 +1,379 @@
+---
+title: syscall-shim
+description: System call shim layer for intercepting and handling syscalls in Unikraft
+---
+
+## Overview
+
+The `syscall-shim` library provides a system call interception and handling layer for Unikraft. It acts as a bridge between application code and the underlying Unikraft kernel, allowing system calls to be intercepted, logged, and routed to appropriate handlers.
+
+This library is essential for supporting binary compatibility with Linux applications, enabling Unikraft to handle system calls made by unmodified binaries or through standard C library functions.
+
+## Architecture
+
+The syscall-shim layer provides multiple levels of system call handling:
+
+1. **Binary system call handler**: Intercepts low-level system call instructions (e.g., `syscall` on x86_64)
+2. **Registration macros**: Allows internal libraries to register system call implementations
+3. **libc-style wrappers**: Provides standard C library function signatures
+4. **Stub generation**: Automatically creates stubs for unimplemented system calls
+
+```
+┌─────────────────────────────────────┐
+│     Application Code                │
+│  (syscall instruction or libc call) │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│    Binary Syscall Handler           │
+│  (Linux ABI register mapping)       │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│    Syscall Shim Layer               │
+│  • Enter/Exit hooks                 │
+│  • Syscall number lookup            │
+│  • Parameter conversion             │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  Registered System Call Handlers    │
+│  (Provided by internal libraries)   │
+└─────────────────────────────────────┘
+```
+
+## Configuration
+
+Enable the syscall-shim library in your configuration:
+
+```bash
+make menuconfig
+```
+
+Navigate to `Library Configuration` → `syscall-shim: Syscall shim layer`
+
+### Configuration Options
+
+#### Basic Options
+
+- **`LIBSYSCALL_SHIM`**: Enable the syscall shim layer (default: n)
+- **`LIBSYSCALL_SHIM_LIBCSTUBS`**: Automatically generate libc-style stubs for unavailable system calls as weak symbols
+
+#### Binary System Call Handler
+
+- **`LIBSYSCALL_SHIM_HANDLER`**: Enable binary system call handler for Linux ABI compatibility (x86_64 and ARM64 only)
+- **`LIBSYSCALL_SHIM_HANDLER_ULTLS`**: Support userland TLS (saves/restores TLS pointer across syscalls)
+
+#### Debugging Options
+
+- **`LIBSYSCALL_SHIM_DEBUG_SYSCALLS`**: Emit debug messages when registered system calls are invoked
+- **`LIBSYSCALL_SHIM_DEBUG_HANDLER`**: Debug messages for binary system call handling
+- **`LIBSYSCALL_SHIM_STRACE`**: Enable `strace`-like output for system calls
+  - **`LIBSYSCALL_SHIM_STRACE_ANSI_COLOR`**: Use ANSI color codes for syntax highlighting
+  - **`LIBSYSCALL_SHIM_STRACE_PRINT_TYPE`**: Include type names in strace output
+
+Example strace output:
+```
+open((const char *)0x400000, (int)O_RDONLY, (mode_t)0) = 3
+read((int)3, (void *)0x7ffe00, (size_t)1024) = 1024
+close((int)3) = 0
+```
+
+## System Call Registration
+
+Internal Unikraft libraries register system calls using macros provided by `<uk/syscall.h>`.
+
+### Registration Macros
+
+#### UK_SYSCALL_DEFINE
+
+Registers a system call that uses errno and returns -1 on errors (standard libc behavior):
+
+```c
+UK_SYSCALL_DEFINE(ssize_t, write, int, fd, const void *, buf, size_t, count)
+{
+    if (fd < 0)
+        return -1;  // Sets errno internally
+    
+    // Implementation here
+    return bytes_written;
+}
+```
+
+This macro generates three functions:
+- `uk_syscall_e_write()`: errno-style wrapper (returns -1, sets errno)
+- `uk_syscall_r_write()`: raw wrapper (returns negative error codes)
+- `uk_syscall_do_write()`: direct implementation call
+- `write()`: libc-style wrapper (if `UK_LIBC_SYSCALLS` is enabled)
+
+#### UK_SYSCALL_R_DEFINE
+
+Registers a system call that returns negative error codes directly:
+
+```c
+UK_SYSCALL_R_DEFINE(int, openat, int, dirfd, const char *, pathname,
+                    int, flags, mode_t, mode)
+{
+    if (!pathname)
+        return -EFAULT;
+    
+    // Implementation here
+    if (error)
+        return -ENOENT;  // Return negative errno
+    
+    return fd;  // Return non-negative value on success
+}
+```
+
+This is preferred for internal implementations as it avoids errno manipulation overhead.
+
+#### UK_SYSCALL_R_E_DEFINE
+
+Registers a system call that needs access to the full execution environment (registers, context):
+
+```c
+UK_SYSCALL_R_E_DEFINE(long, clone, unsigned long, flags, void *, child_stack,
+                      int *, parent_tid, int *, child_tid, unsigned long, tls)
+{
+    // Has access to execenv for low-level context manipulation
+    struct ukarch_execenv *execenv = /* provided automatically */;
+    
+    // Implementation here
+    return 0;
+}
+```
+
+This variant is used for system calls that need to manipulate CPU state, like `clone()`, `rt_sigreturn()`, etc.
+
+### Example: Implementing a Custom System Call
+
+Here's how an internal library might implement the `getcwd()` system call:
+
+```c
+#include <uk/syscall.h>
+#include <errno.h>
+
+UK_SYSCALL_R_DEFINE(long, getcwd, char *, buf, size_t, size)
+{
+    if (!buf)
+        return -EINVAL;
+    
+    if (size < 2)
+        return -ERANGE;
+    
+    // Simple implementation: always return root
+    buf[0] = '/';
+    buf[1] = '\0';
+    
+    return (long)buf;
+}
+```
+
+The library's `Makefile.uk` should be configured to export the symbol:
+
+```makefile
+# In lib/posix-vfs/Makefile.uk
+LIBPOSIX_VFS_SRCS-y += $(LIBPOSIX_VFS_BASE)/getcwd.c
+```
+
+## System Call Invocation
+
+### From Application Code
+
+Applications can invoke system calls through several interfaces:
+
+#### 1. Standard libc Functions
+
+```c
+#include <unistd.h>
+#include <fcntl.h>
+
+int main() {
+    int fd = open("/file.txt", O_RDONLY);  // Calls uk_syscall_e_open()
+    if (fd < 0) {
+        perror("open failed");
+        return 1;
+    }
+    
+    char buf[100];
+    ssize_t n = read(fd, buf, sizeof(buf));  // Calls uk_syscall_e_read()
+    close(fd);
+    
+    return 0;
+}
+```
+
+#### 2. Direct Unikraft System Call API
+
+```c
+#include <uk/syscall.h>
+
+int main() {
+    // Dynamic dispatch (runtime lookup)
+    long ret = uk_syscall(SYS_write, 1, "Hello\n", 6);
+    
+    // Static dispatch (compile-time, more efficient)
+    ret = uk_syscall_static(SYS_write, 1, "Hello\n", 6);
+    
+    // Raw variant (returns negative errno)
+    ret = uk_syscall_r(SYS_write, 1, "Hello\n", 6);
+    
+    return 0;
+}
+```
+
+#### 3. Direct Binary System Calls (x86_64)
+
+When `LIBSYSCALL_SHIM_HANDLER` is enabled, applications can use raw `syscall` instructions:
+
+```c
+static inline long syscall_write(int fd, const void *buf, size_t count) {
+    long ret;
+    register long rax asm("rax") = 1;      // SYS_write = 1
+    register long rdi asm("rdi") = fd;
+    register long rsi asm("rsi") = (long)buf;
+    register long rdx asm("rdx") = count;
+    
+    asm volatile("syscall"
+        : "=a"(ret)
+        : "r"(rax), "r"(rdi), "r"(rsi), "r"(rdx)
+        : "rcx", "r11", "memory");
+    
+    return ret;
+}
+```
+
+This is automatically handled by musl or other standard C libraries.
+
+## Enter/Exit Hooks
+
+The syscall-shim provides hooks that execute before and after each system call:
+
+```c
+void _uk_syscall_wrapper_do_entertab(struct ukarch_execenv *execenv);
+void _uk_syscall_wrapper_do_exittab(struct ukarch_execenv *execenv);
+```
+
+These hooks can be used to:
+- Implement system call tracing
+- Collect performance metrics
+- Validate security policies
+- Switch execution contexts
+
+## System Call Number Mapping
+
+The library maintains mappings between system call numbers and implementations:
+
+```c
+// Get system call name from number
+const char *uk_syscall_name(long nr);
+
+// Get system call name (only for provided syscalls)
+const char *uk_syscall_name_p(long nr);
+
+// Pretty-print system call request and response
+int uk_snprsyscall(char *buf, size_t maxlen, int fmtf,
+                   long syscall_num, long sysret, ...);
+```
+
+Example usage:
+```c
+long ret = uk_syscall(SYS_open, "/file", O_RDONLY);
+printf("Called %s, returned %ld\n", uk_syscall_name(SYS_open), ret);
+// Output: Called open, returned 3
+```
+
+## Automatic Stub Generation
+
+When `LIBSYSCALL_SHIM_LIBCSTUBS` is enabled, the library automatically generates weak symbol stubs for all standard Linux system calls.
+
+<Warning>
+Automatic stub generation may cause linking failures in some cases:
+
+- **Double definition conflicts**: If multiple libraries provide the same system call without properly registering it
+- **Compiler optimization issues**: Some optimization levels may not properly handle weak symbols
+
+If you encounter linking errors about duplicate symbols, disable `LIBSYSCALL_SHIM_LIBCSTUBS` and ensure proper system call registration.
+</Warning>
+
+Example generated stub:
+```c
+// Automatically generated weak stub for unavailable syscall
+__weak long uk_syscall_e_some_unimplemented_syscall(...) {
+    uk_pr_debug("System call \"some_unimplemented_syscall\" is not available (-ENOSYS)\n");
+    errno = ENOSYS;
+    return -1;
+}
+```
+
+## Implementation Details
+
+### Register Mapping (x86_64 Linux ABI)
+
+The binary system call handler maps registers according to Linux ABI:
+
+| Register | Purpose           | System Call Argument |
+|----------|-------------------|---------------------|
+| `rax`    | Syscall number    | Return value        |
+| `rdi`    | Argument 0        |                     |
+| `rsi`    | Argument 1        |                     |
+| `rdx`    | Argument 2        |                     |
+| `r10`    | Argument 3        |                     |
+| `r8`     | Argument 4        |                     |
+| `r9`     | Argument 5        |                     |
+
+The handler preserves registers `rbx`, `rbp`, `r12-r15` as required by the ABI.
+
+### Generated Files
+
+The build system generates several files from AWK scripts:
+
+- **syscall_nrs.h**: System call number definitions
+- **syscall_map.c**: Dispatch table mapping numbers to handlers
+- **syscall_provided.c**: List of provided system calls
+- **syscall_stubs.c**: Stub implementations for unavailable calls
+- **syscall_static.h**: Static dispatch macros
+
+These are generated at build time from `lib/syscall_shim/*.awk` scripts.
+
+## Performance Considerations
+
+### Static vs Dynamic Dispatch
+
+```c
+// Dynamic dispatch: Runtime lookup in dispatch table
+// Slower, but flexible
+long ret = uk_syscall(nr, arg1, arg2);
+
+// Static dispatch: Direct function call
+// Faster, requires constant syscall number
+long ret = uk_syscall_static(SYS_write, fd, buf, count);
+```
+
+**Recommendation**: Use static dispatch (`uk_syscall_static`) when the system call number is known at compile time for better performance.
+
+### Overhead
+
+With debugging disabled:
+- Static dispatch: ~10-20 CPU cycles overhead
+- Dynamic dispatch: ~50-100 CPU cycles (dispatch table lookup)
+- Binary syscall handler: ~100-200 cycles (context switch, register mapping)
+
+## Source Code Reference
+
+Key files in `lib/syscall_shim/`:
+
+- `include/uk/syscall.h`: Main API and registration macros (line 35+)
+- `uk_syscall_binary.c`: Binary system call handler
+- `uk_prsyscall.c`: Pretty-printing implementation for strace-like output
+- `tabs.c`: Enter/exit hook tables
+- `*.awk`: AWK scripts for code generation
+
+## See Also
+
+- [nolibc](/libraries/nolibc) - Lightweight C library that uses syscall-shim
+- [POSIX Compatibility](/libraries/posix-compatibility) - POSIX libraries that register system calls
+- [Linux System Calls](https://man7.org/linux/man-pages/man2/syscalls.2.html) - Linux syscall documentation

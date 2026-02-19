@@ -1,0 +1,448 @@
+---
+title: VirtIO Drivers
+description: VirtIO paravirtualized device drivers for Unikraft
+---
+
+# VirtIO Drivers
+
+VirtIO is a standardized interface for paravirtualized devices in virtualized environments. Unikraft provides comprehensive VirtIO driver support for KVM/QEMU, VirtualBox, and other hypervisors supporting the VirtIO specification.
+
+## Architecture
+
+### VirtIO Bus Layer
+
+The VirtIO bus (`libvirtio_bus`) provides the core abstraction for VirtIO devices:
+
+```c
+struct virtio_dev {
+    __u64 features;                    // Device feature bits
+    struct virtio_dev_id id;           // Device identifier
+    struct virtio_config_ops *cops;    // Configuration operations
+    struct virtio_driver *vdrv;        // Associated driver
+    enum virtio_dev_status status;     // Device state
+    void *priv;                        // Driver private data
+};
+```
+
+**Source:** `drivers/virtio/bus/include/virtio/virtio_bus.h`
+
+### Device States
+
+VirtIO devices transition through these states:
+
+1. **VIRTIO_DEV_RESET** - Device reset/uninitialized
+2. **VIRTIO_DEV_INITIALIZED** - Device acknowledged
+3. **VIRTIO_DEV_CONFIGURED** - Features negotiated
+4. **VIRTIO_DEV_RUNNING** - Device operational
+5. **VIRTIO_DEV_STOPPED** - Device stopped
+
+### VirtIO Ring
+
+The virtqueue ring buffer (`libvirtio_ring`) handles data transfer between guest and host:
+- Split virtqueues (legacy and modern)
+- Descriptor chains for scatter-gather I/O
+- Event suppression for performance
+
+## Transport Layers
+
+VirtIO supports two transport mechanisms:
+
+### VirtIO PCI (`libvirtio_pci`)
+
+PCI/PCIe transport for x86 and ARM platforms.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_PCI=y
+CONFIG_HAVE_PCI=y
+CONFIG_LIBUKBUS_PCI=y
+```
+
+**Requirements:**
+- PCI bus support
+- VIRTIO_DEVICE enabled
+- Automatically selected when PCI available
+
+**Source:** `drivers/virtio/pci/`
+
+### VirtIO MMIO (`libvirtio_mmio`)
+
+Memory-mapped I/O transport for ARM and embedded platforms.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_MMIO=y
+CONFIG_HAVE_MMIO=y
+CONFIG_LIBUKBUS_PLATFORM=y
+```
+
+**Device Specification:**
+
+Via FDT (Device Tree):
+```dts
+virtio@a000000 {
+    compatible = "virtio,mmio";
+    reg = <0xa000000 0x200>;
+    interrupts = <16>;
+};
+```
+
+Via command line (Linux-compatible format):
+```bash
+# Enable Linux-compatible command line
+CONFIG_VIRTIO_MMIO_LINUX_COMPAT_CMDLINE=y
+
+# Boot parameter
+virtio_mmio.device=512@0xa000000:16
+```
+
+Or Unikraft format:
+```bash
+libvirtio_mmio.device=512@0xa000000:16
+```
+
+**Format:** `<size>@<base>:<irq>[:<id>]`
+
+**Configuration options:**
+- `CONFIG_VIRTIO_MMIO_MAX_DEV_CMDLINE` - Maximum command-line devices (default: 4)
+- `CONFIG_VIRTIO_MMIO_FDT` - Enable FDT device discovery
+- `CONFIG_VIRTIO_MMIO_LINUX_COMPAT_CMDLINE` - Linux parameter format
+
+**Source:** `drivers/virtio/mmio/`
+
+## VirtIO Device Drivers
+
+### VirtIO Block (`libvirtio_blk`)
+
+Block device driver for virtual disks.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_BLK=y
+CONFIG_LIBUKBLKDEV=y
+CONFIG_LIBVIRTIO_BUS=y
+```
+
+**Features:**
+- Read-only mode (`VIRTIO_BLK_F_RO`)
+- Configurable block size (`VIRTIO_BLK_F_BLK_SIZE`)
+- Multi-queue support (`VIRTIO_BLK_F_MQ`)
+- Flush support (`VIRTIO_BLK_F_FLUSH`)
+- Write-cache enable (`VIRTIO_BLK_F_CONFIG_WCE`)
+- Segment limits (`VIRTIO_BLK_F_SEG_MAX`, `VIRTIO_BLK_F_SIZE_MAX`)
+
+**Device ID:** `VIRTIO_ID_BLOCK` (2)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -drive file=disk.img,format=raw,if=none,id=hd0 \
+    -device virtio-blk-pci,drive=hd0
+```
+
+**Usage in Unikraft:**
+```c
+#include <uk/blkdev.h>
+
+struct uk_blkdev *dev = uk_blkdev_get(0);  // Get first block device
+struct uk_blkdev_queue *queue = uk_blkdev_queue_get(dev, 0);
+
+// Perform I/O operations
+struct uk_blkreq req;
+uk_blkreq_read(&req, sector, num_sectors, buffer);
+uk_blkdev_queue_submit_one(queue, &req);
+```
+
+**Source:** `drivers/virtio/blk/`
+
+### VirtIO Network (`libvirtio_net`)
+
+Network device driver for virtual NICs.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_NET=y
+CONFIG_LIBUKNETDEV=y
+CONFIG_LIBVIRTIO_BUS=y
+```
+
+**Features:**
+- Checksum offloading
+- TSO (TCP Segmentation Offload)
+- Multi-queue (multiple TX/RX queue pairs)
+- MAC address configuration
+- MTU configuration
+
+**Device ID:** `VIRTIO_ID_NET` (1)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -netdev user,id=net0 \
+    -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56
+```
+
+**Usage in Unikraft:**
+```c
+#include <uk/netdev.h>
+
+struct uk_netdev *dev = uk_netdev_get(0);  // Get first network device
+uk_netdev_start(dev);
+
+// Transmit packet
+struct uk_netbuf *pkt = uk_netbuf_alloc(...);
+uk_netdev_tx_one(dev, 0, pkt);
+
+// Receive packet  
+struct uk_netbuf *rxpkt;
+uk_netdev_rx_one(dev, 0, &rxpkt);
+```
+
+**Source:** `drivers/virtio/net/`
+
+### VirtIO 9P (`libvirtio_9p`)
+
+9P filesystem transport for host directory sharing.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_9P=y
+CONFIG_LIBUK9P=y
+CONFIG_LIBVIRTIO_BUS=y
+```
+
+**Device ID:** `VIRTIO_ID_9P` (9)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -fsdev local,id=fs0,path=/host/path,security_model=none \
+    -device virtio-9p-pci,fsdev=fs0,mount_tag=hostshare
+```
+
+**Usage in Unikraft:**
+Mount the shared directory:
+```c
+#include <uk/9p.h>
+
+// Mount 9p filesystem
+mount("hostshare", "/mnt", "9p", 0, "trans=virtio");
+```
+
+**Mount tag** must match QEMU configuration.
+
+**Source:** `drivers/virtio/9p/`
+
+### VirtIO FS (`libvirtio_fs`)
+
+Modern shared filesystem driver with better performance than 9P.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVIRTIO_FS=y
+CONFIG_LIBVIRTIO_BUS=y
+CONFIG_LIBUKSCHED=y
+```
+
+**Features:**
+- FUSE protocol over VirtIO
+- DAX (Direct Access) for memory mapping
+- Better performance than 9P
+- POSIX semantics
+
+**Device ID:** `VIRTIO_ID_FS` (26)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -chardev socket,id=char0,path=/tmp/vfsd.sock \
+    -device vhost-user-fs-pci,queue-size=1024,chardev=char0,tag=myfs
+
+# Start virtiofsd daemon (on host)
+virtiofsd --socket-path=/tmp/vfsd.sock --shared-dir=/host/path
+```
+
+**Source:** `drivers/virtio/fs/`
+
+## Driver Registration
+
+VirtIO drivers register using the `VIRTIO_BUS_REGISTER_DRIVER` macro:
+
+```c
+static struct virtio_dev_id blk_dev_ids[] = {
+    { VIRTIO_ID_BLOCK },
+    { VIRTIO_ID_INVALID }  // Terminator
+};
+
+static struct virtio_driver virtio_blk_drv = {
+    .dev_ids = blk_dev_ids,
+    .init = virtio_blk_drv_init,
+    .add_dev = virtio_blk_add_dev,
+};
+
+VIRTIO_BUS_REGISTER_DRIVER(&virtio_blk_drv);
+```
+
+## Feature Negotiation
+
+VirtIO uses feature bits for capability negotiation:
+
+```c
+// Get device features
+__u64 dev_features = virtio_feature_get(vdev);
+
+// Set driver features
+__u64 drv_features = 0;
+VIRTIO_FEATURE_SET(drv_features, VIRTIO_BLK_F_FLUSH);
+VIRTIO_FEATURE_SET(drv_features, VIRTIO_F_VERSION_1);
+
+// Negotiate
+vdev->features = dev_features & drv_features;
+virtio_feature_set(vdev);
+```
+
+**Common feature bits:**
+- `VIRTIO_F_VERSION_1` (32) - VirtIO 1.0+ compliance
+- `VIRTIO_F_RING_EVENT_IDX` (29) - Event index for notifications
+- `VIRTIO_F_RING_INDIRECT_DESC` (28) - Indirect descriptors
+
+## Virtqueue Operations
+
+Working with virtqueues:
+
+```c
+// Find virtqueues
+__u16 num_vqs = 1;
+__u16 vq_size[1];
+virtio_find_vqs(vdev, num_vqs, vq_size);
+
+// Setup virtqueue
+struct virtqueue *vq = virtio_vqueue_setup(
+    vdev,
+    queue_id,     // Queue ID
+    nr_desc,      // Number of descriptors
+    callback,     // Interrupt callback
+    allocator     // Memory allocator
+);
+
+// Add buffers to virtqueue
+uk_sglist_append(sg, buffer, length);
+virtqueue_buffer_enqueue(vq, sg_list, sg_in, sg_out, cookie);
+
+// Notify device
+virtqueue_host_notify(vq);
+
+// Release virtqueue
+virtio_vqueue_release(vdev, vq, allocator);
+```
+
+## Device Configuration
+
+Reading device configuration:
+
+```c
+// Read configuration space
+struct virtio_blk_config config;
+virtio_config_get(vdev, 
+    offsetof(struct virtio_blk_config, capacity),
+    &config.capacity,
+    sizeof(config.capacity),
+    sizeof(config.capacity)
+);
+```
+
+## Interrupt Handling
+
+VirtIO uses virtqueue callbacks for interrupt handling:
+
+```c
+static int virtio_blk_vq_callback(struct virtqueue *vq, void *priv)
+{
+    // Process completed requests
+    void *cookie;
+    __u32 len;
+    
+    while ((cookie = virtqueue_buffer_dequeue(vq, &len)) != NULL) {
+        // Handle completed I/O
+        struct request *req = cookie;
+        complete_request(req);
+    }
+    
+    return UK_EVENT_HANDLED;
+}
+```
+
+## Configuration Summary
+
+### Enable All VirtIO Drivers
+
+```kconfig
+# Core VirtIO
+CONFIG_VIRTIO_DEVICE=y
+CONFIG_LIBVIRTIO_BUS=y
+CONFIG_LIBVIRTIO_RING=y
+
+# Transports
+CONFIG_LIBVIRTIO_PCI=y     # For PCI devices
+CONFIG_LIBVIRTIO_MMIO=y    # For MMIO devices
+
+# Device drivers
+CONFIG_LIBVIRTIO_BLK=y     # Block devices
+CONFIG_LIBVIRTIO_NET=y     # Network devices
+CONFIG_LIBVIRTIO_9P=y      # 9P filesystem
+CONFIG_LIBVIRTIO_FS=y      # VirtIO FS
+
+# Dependencies
+CONFIG_LIBUKBUS=y
+CONFIG_LIBUKALLOC=y
+CONFIG_LIBUKSGLIST=y
+CONFIG_LIBUKBLKDEV=y       # For virtio-blk
+CONFIG_LIBUKNETDEV=y       # For virtio-net
+CONFIG_LIBUK9P=y           # For virtio-9p
+```
+
+## Debugging
+
+Enable VirtIO debugging:
+
+```kconfig
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTK_INFO=y
+```
+
+Add debug prints in driver code:
+```c
+uk_pr_info("VirtIO device features: 0x%lx\n", vdev->features);
+uk_pr_debug("Virtqueue setup: %d descriptors\n", nr_desc);
+```
+
+## Performance Tuning
+
+1. **Multi-queue support** - Use multiple virtqueues for parallelism
+2. **Event index** - Enable `VIRTIO_F_RING_EVENT_IDX` to reduce notifications
+3. **Indirect descriptors** - Enable `VIRTIO_F_RING_INDIRECT_DESC` for scatter-gather
+4. **Queue size** - Increase descriptor count for higher throughput
+
+## Common Issues
+
+### Device Not Detected
+- Verify transport layer (PCI/MMIO) is enabled
+- Check QEMU device configuration
+- Enable debug output to see probe failures
+
+### Poor Performance
+- Enable multi-queue support
+- Check feature negotiation
+- Verify interrupt handling is working
+
+### Mount Failures (9P/FS)
+- Verify mount tag matches QEMU configuration
+- Check filesystem library (lib9p/libvirtiofs) is enabled
+- Ensure VFS is configured properly
+
+## References
+
+- VirtIO Specification: https://docs.oasis-open.org/virtio/virtio/
+- Source: `drivers/virtio/` in Unikraft repository
+- QEMU VirtIO Documentation: https://wiki.qemu.org/Features/VirtIO

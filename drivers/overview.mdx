@@ -1,0 +1,193 @@
+---
+title: Device Drivers Overview
+description: Overview of Unikraft's device driver architecture and available drivers
+---
+
+# Device Drivers Overview
+
+Unikraft provides a modular device driver architecture that supports various hardware devices through a consistent abstraction layer. The driver subsystem is organized into multiple categories, each addressing specific hardware interfaces.
+
+## Driver Architecture
+
+Unikraft's driver architecture follows a layered approach:
+
+1. **Bus Layer** - Handles device enumeration and driver registration
+2. **Driver Layer** - Implements device-specific functionality
+3. **Interface Layer** - Provides standard APIs for applications
+
+### Driver Registration
+
+Drivers in Unikraft are registered using constructor functions that run during system initialization. The registration process follows this pattern:
+
+```c
+static struct driver_type my_driver = {
+    .device_ids = device_id_table,
+    .init = driver_init,
+    .add_dev = driver_add_device,
+};
+
+DRIVER_REGISTER_MACRO(my_driver);
+```
+
+The macro expands to a constructor function that registers the driver at priority `UK_PRIO_AFTER(UK_BUS_REGISTER_PRIO)`, ensuring buses are initialized before drivers.
+
+## Available Driver Categories
+
+### VirtIO Drivers
+VirtIO provides paravirtualized device drivers for virtualized environments:
+- **virtio-blk** - Block device driver
+- **virtio-net** - Network device driver
+- **virtio-9p** - 9P filesystem transport
+- **virtio-fs** - Virtio filesystem driver
+- Transport layers: PCI and MMIO
+
+See [VirtIO Drivers](/drivers/virtio) for detailed information.
+
+### Console Drivers
+Serial console drivers for various UART controllers:
+- **ns16550** - 16550-compatible UART (x86 and ARM)
+- **pl011** - ARM PrimeCell UART
+- **vgacons** - VGA text-mode console (x86)
+
+See [Console Drivers](/drivers/console) for detailed information.
+
+### Interrupt Controllers
+Hardware interrupt management:
+- **GIC** - ARM Generic Interrupt Controller (v2/v3)
+- **xPIC** - Intel 8259 PIC and APIC
+
+See [Interrupt Controllers](/drivers/interrupt-controllers) for detailed information.
+
+### Bus Systems
+Device enumeration and management:
+- **PCI** - PCI/PCIe bus with ECAM support
+- **Platform Bus** - FDT-based device discovery
+
+See [Bus Systems](/drivers/bus-systems) for detailed information.
+
+## Driver Configuration
+
+All drivers are configured through Unikraft's KConfig system. The main driver menu is located at:
+
+```
+make menuconfig
+  → Architecture Selection
+    → [Platform]
+  → Library Configuration
+    → ukbus: Bus drivers
+    → ukintctlr: Interrupt controller
+    → ukconsole: Serial console
+    → virtio: Virtio drivers
+```
+
+### Common Configuration Options
+
+Each driver category provides:
+- **Enable/Disable** - Toggle driver compilation
+- **Device Selection** - Choose specific devices to support
+- **Feature Flags** - Enable optional functionality
+- **Debug Options** - Verbose logging and assertions
+
+## Driver Dependencies
+
+Drivers typically depend on:
+- **ukbus** - Bus abstraction layer (`CONFIG_LIBUKBUS`)
+- **ukalloc** - Memory allocator (`CONFIG_LIBUKALLOC`)
+- **ukintctlr** - Interrupt handling (`CONFIG_LIBUKINTCTLR`)
+- Platform-specific features (FDT, ACPI, etc.)
+
+## Building with Drivers
+
+To include drivers in your unikernel:
+
+1. **Enable required drivers** in menuconfig:
+   ```bash
+   make menuconfig
+   ```
+
+2. **Configure platform support**:
+   - Select appropriate architecture (x86_64, ARM64)
+   - Enable virtualization features (KVM, Xen) if needed
+
+3. **Build the unikernel**:
+   ```bash
+   make
+   ```
+
+## Driver Initialization Order
+
+Drivers initialize in this sequence:
+
+1. **Platform initialization** - CPU, memory setup
+2. **Bus registration** - PCI, platform bus
+3. **Interrupt controllers** - GIC, xPIC
+4. **Device drivers** - VirtIO, console, etc.
+5. **Device probing** - Enumerate and configure devices
+
+## Adding Custom Drivers
+
+To add a custom driver:
+
+1. Create driver directory structure:
+   ```
+   drivers/mydriver/
+   ├── Config.uk        # KConfig options
+   ├── Makefile.uk      # Build rules
+   ├── mydriver.c       # Driver implementation
+   └── include/
+       └── uk/
+           └── mydriver.h
+   ```
+
+2. Implement driver interface:
+   ```c
+   #include <uk/bus.h>
+   
+   static int my_driver_probe(struct device *dev) {
+       // Initialize device
+       return 0;
+   }
+   
+   static struct my_driver drv = {
+       .probe = my_driver_probe,
+   };
+   
+   MY_BUS_REGISTER_DRIVER(&drv);
+   ```
+
+3. Register in parent Makefile.uk:
+   ```make
+   $(eval $(call import_lib,$(UK_DRIV_BASE)/mydriver))
+   ```
+
+## Driver APIs
+
+Each driver type provides specific APIs:
+
+- **Block Devices** - `libukblkdev` API
+- **Network Devices** - `libuknetdev` API  
+- **Console** - `libukconsole` API
+- **Filesystem** - VFS integration through `lib9p` or `libvirtiofs`
+
+## Source Code Location
+
+Driver source code is organized in the Unikraft repository:
+
+```
+drivers/
+├── ukbus/           # Bus drivers (PCI, platform)
+├── ukintctlr/       # Interrupt controllers (GIC, xPIC)
+├── ukconsole/       # Console drivers (ns16550, pl011, vgacons)
+├── virtio/          # VirtIO drivers and transports
+├── xen/             # Xen paravirtual drivers
+├── ukps2/           # PS/2 controller
+├── ukrandom/        # Random number generator
+└── ukrtc/           # Real-time clock
+```
+
+## Next Steps
+
+- Learn about [VirtIO drivers](/drivers/virtio) for virtualized environments
+- Configure [console drivers](/drivers/console) for serial output
+- Understand [interrupt controllers](/drivers/interrupt-controllers) for IRQ handling
+- Explore [bus systems](/drivers/bus-systems) for device enumeration

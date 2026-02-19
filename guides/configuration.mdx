@@ -1,0 +1,729 @@
+---
+title: Kconfig Configuration System
+description: Master Unikraft's configuration system for fine-grained customization
+---
+
+## Overview
+
+Unikraft uses the Kconfig configuration system (originally from the Linux kernel) to provide fine-grained control over which features and components are included in your unikernel build.
+
+This modular approach allows you to:
+- Include only required functionality
+- Minimize binary size and attack surface
+- Optimize for performance or size
+- Enable debugging features
+- Configure platform-specific options
+
+## Configuration Methods
+
+There are three ways to configure your Unikraft build:
+
+1. **Interactive menuconfig** (Recommended for exploration)
+2. **Configuration files** (.config)
+3. **Kraftfile kconfig directives** (kraft CLI)
+
+## Using menuconfig
+
+The interactive configuration tool provides a user-friendly interface to explore and configure options.
+
+### Launching menuconfig
+
+<CodeGroup>
+
+```bash Make-based
+make menuconfig
+```
+
+```bash kraft CLI
+kraft menu
+```
+
+</CodeGroup>
+
+### Navigating menuconfig
+
+<Steps>
+
+<Step title="Navigate the menu">
+
+- **Arrow keys**: Move up/down through options
+- **Enter**: Enter submenu or toggle boolean option
+- **Space**: Toggle option or open submenu
+- **Y**: Enable option
+- **N**: Disable option
+- **M**: Set option as module (if applicable)
+- **?**: Display help for selected option
+- **/**: Search for options
+- **Esc Esc**: Go back or exit
+
+</Step>
+
+<Step title="Save configuration">
+
+When you exit menuconfig, you'll be prompted to save:
+
+```
+Do you wish to save your new configuration?
+<Yes>  <No>
+```
+
+Select **Yes** to save to `.config` file.
+
+</Step>
+
+<Step title="Load saved configuration">
+
+Your configuration is automatically loaded from `.config` on subsequent builds:
+
+```bash
+make  # Uses saved .config
+```
+
+</Step>
+
+</Steps>
+
+## Configuration Structure
+
+The Unikraft configuration menu is organized into major sections:
+
+```
+Unikraft/0.20.0 (Kiviuq) Configuration
+  Architecture Selection  --->
+  Platform Configuration  --->
+  Device Drivers  --->
+  Library Configuration  --->
+  Application Options  --->
+  Build Options  --->
+```
+
+### Architecture Selection
+
+Choose target CPU architecture:
+
+```
+Architecture Selection  --->
+  --- Architecture Selection
+  ( ) ARM 32-bit
+  ( ) ARM 64-bit (Aarch64)
+  (X) x86 compatible
+```
+
+For x86_64:
+```
+  x86 Architecture Configuration  --->
+    Processor type  --->
+      (X) Generic 64-bit (x86_64)
+      ( ) Intel Core i7 (Nehalem)
+      ( ) Intel Core i7 (Skylake)
+      ( ) AMD Zen
+```
+
+### Platform Configuration
+
+Select target hypervisor/platform:
+
+```
+Platform Configuration  --->
+  [*] KVM guest
+  [*] QEMU guest  
+  [ ] Xen guest
+  [ ] Linuxu (User-mode Linux)
+```
+
+Each platform has specific options:
+
+```
+KVM guest  --->
+  [*] Serial console support
+  [*] VGA console support
+  [*] RTC support
+  [ ] PCI bus support
+  Memory size (1024) MB
+```
+
+### Library Configuration
+
+Configure system libraries and features:
+
+```
+Library Configuration  --->
+  [ ] ukdebug: Debugging features
+  [*] ukalloc: Memory allocators
+  [*] ukboot: Initialization & booting
+  [ ] uklibparam: Kernel parameter parser
+  [ ] uknetdev: Network device abstraction
+  [ ] vfscore: VFS core interface
+  [ ] posix-process: POSIX process support
+  [ ] musl: musl C library
+```
+
+### Build Options
+
+Configure compilation and optimization settings.
+
+## Build Options Reference
+
+### Optimization Levels
+
+Control compiler optimization:
+
+```
+Build Options  --->
+  Optimization level  --->
+    ( ) No optimizations (-O0)
+    (X) Optimize for performance (-O2)
+    ( ) Optimize for size (-Os)
+```
+
+**Available options**:
+- `CONFIG_OPTIMIZE_NONE` (-O0): No optimization, fastest compilation
+- `CONFIG_OPTIMIZE_PERF` (-O2): Balanced performance optimization (default)
+- `CONFIG_OPTIMIZE_SIZE` (-Os): Minimize binary size
+
+<Note>
+For production builds, use `-O2`. For smallest images, use `-Os`. For debugging, use `-O0`.
+</Note>
+
+### Debug Symbols
+
+Control debug information level:
+
+```
+Build Options  --->
+  Debug information level  --->
+    ( ) Level 0 (-g0), None
+    ( ) Level 1 (-g1)
+    ( ) Level 2 (-g2)
+    (X) Level 3 (-g3)
+```
+
+**Available options**:
+- `DEBUG_SYMBOLS_LVL0` (-g0): No debug info (not recommended)
+- `DEBUG_SYMBOLS_LVL1` (-g1): Minimal debug info
+- `DEBUG_SYMBOLS_LVL2` (-g2): Standard debug info (GCC default)
+- `DEBUG_SYMBOLS_LVL3` (-g3): Maximum debug info including macros (default)
+
+### Stack Frame Pointers
+
+```
+Build Options  --->
+  [X] Keep stack frame pointers
+```
+
+**Option**: `CONFIG_OPTIMIZE_NOOMITFP`
+
+When enabled (default):
+- Reserves a CPU register as frame pointer
+- Enables stack unwinding for debugging
+- Simplifies crash analysis
+- Minimal performance overhead (~1-2%)
+
+### Dead Code Elimination
+
+```
+Build Options  --->
+  [X] Drop unused functions and data
+```
+
+**Option**: `CONFIG_OPTIMIZE_DEADELIM`
+
+When enabled:
+- Removes unreferenced functions and data
+- Significantly reduces binary size
+- Increases link time
+- Recommended for production builds
+
+### Link-Time Optimization (LTO)
+
+```
+Build Options  --->
+  [ ] LTO - Link time optimizations (EXPERIMENTAL)
+```
+
+**Option**: `CONFIG_OPTIMIZE_LTO`
+
+When enabled:
+- Performs cross-module optimizations
+- Can improve performance by 5-15%
+- Significantly increases build time
+- May cause issues with some code patterns
+
+<Warning>
+LTO is experimental and may not work with all applications.
+</Warning>
+
+### Position-Independent Executable (PIE)
+
+```
+Build Options  --->
+  [ ] Static-PIE - Position-independent binary
+```
+
+**Option**: `CONFIG_OPTIMIZE_PIE`
+
+When enabled:
+- Creates relocatable binary
+- Required for UEFI boot
+- Slight performance overhead
+- Enables ASLR (Address Space Layout Randomization)
+
+### Compiler Warnings
+
+```
+Build Options  --->
+  [ ] Treat warnings as errors
+```
+
+**Option**: `CONFIG_OPTIMIZE_WARNISERROR`
+
+When enabled:
+- Stops build on compiler warnings
+- Recommended for CI/CD pipelines
+- Helps maintain code quality
+
+### Image Compression
+
+```
+Build Options  --->
+  [ ] Compress images
+```
+
+**Option**: `CONFIG_OPTIMIZE_COMPRESS`
+
+When enabled:
+- Creates compressed kernel images
+- Reduces storage and transfer size
+- Slightly increases boot time
+- Not supported by all platforms
+
+### Cross-Compilation
+
+```
+Build Options  --->
+  Custom cross-compiler tool prefix (optional)
+    (aarch64-linux-gnu-) value
+```
+
+**Option**: `CONFIG_CROSS_COMPILE`
+
+Example values:
+- ARM64: `aarch64-linux-gnu-`
+- ARM32: `arm-linux-gnueabihf-`
+- RISC-V: `riscv64-linux-gnu-`
+
+## Common Configuration Patterns
+
+### Minimal Unikernel (Smallest Size)
+
+<Steps>
+
+<Step title="Set optimization for size">
+
+```
+Build Options  --->
+  Optimization level  --->
+    (X) Optimize for size (-Os)
+```
+
+</Step>
+
+<Step title="Enable dead code elimination">
+
+```
+Build Options  --->
+  [X] Drop unused functions and data
+```
+
+</Step>
+
+<Step title="Disable debug symbols">
+
+```
+Build Options  --->
+  Debug information level  --->
+    (X) Level 0 (-g0), None
+```
+
+</Step>
+
+<Step title="Disable frame pointers">
+
+```
+Build Options  --->
+  [ ] Keep stack frame pointers
+```
+
+</Step>
+
+<Step title="Disable unnecessary features">
+
+In Library Configuration, disable all non-essential libraries.
+
+</Step>
+
+</Steps>
+
+### Performance-Optimized Unikernel
+
+<Steps>
+
+<Step title="Optimize for performance">
+
+```
+Build Options  --->
+  Optimization level  --->
+    (X) Optimize for performance (-O2)
+```
+
+</Step>
+
+<Step title="Enable LTO (optional)">
+
+```
+Build Options  --->
+  [X] LTO - Link time optimizations (EXPERIMENTAL)
+```
+
+</Step>
+
+<Step title="Select specific CPU type">
+
+```
+Architecture Selection  --->
+  x86 Architecture Configuration  --->
+    Processor type  --->
+      (X) Intel Core i7 (Skylake)
+```
+
+</Step>
+
+<Step title="Enable platform optimizations">
+
+Select only the target platform (e.g., only KVM, not QEMU).
+
+</Step>
+
+</Steps>
+
+### Debug-Friendly Configuration
+
+<Steps>
+
+<Step title="Disable optimizations">
+
+```
+Build Options  --->
+  Optimization level  --->
+    (X) No optimizations (-O0)
+```
+
+</Step>
+
+<Step title="Maximum debug symbols">
+
+```
+Build Options  --->
+  Debug information level  --->
+    (X) Level 3 (-g3)
+```
+
+</Step>
+
+<Step title="Keep frame pointers">
+
+```
+Build Options  --->
+  [X] Keep stack frame pointers
+```
+
+</Step>
+
+<Step title="Enable debug libraries">
+
+```
+Library Configuration  --->
+  [X] ukdebug: Debugging features  --->
+    [X] Enable debug messages
+    [X] Enable assertions
+    [X] GDB stub support
+    [X] uklibparam: Kernel parameter parser
+```
+
+</Step>
+
+</Steps>
+
+## Configuration Files
+
+### Understanding .config
+
+The `.config` file stores your configuration:
+
+```bash .config
+#
+# Automatically generated file; DO NOT EDIT.
+# Unikraft/0.20.0 (Kiviuq) Configuration
+#
+CONFIG_UK_FULLVERSION="0.20.0"
+CONFIG_UK_CODENAME="Kiviuq"
+CONFIG_UK_ARCH="x86_64"
+
+#
+# Architecture Selection
+#
+CONFIG_ARCH_X86_64=y
+# CONFIG_ARCH_ARM_32 is not set
+# CONFIG_ARCH_ARM_64 is not set
+
+#
+# Build Options
+#
+# CONFIG_OPTIMIZE_NONE is not set
+CONFIG_OPTIMIZE_PERF=y
+# CONFIG_OPTIMIZE_SIZE is not set
+CONFIG_OPTIMIZE_NOOMITFP=y
+CONFIG_OPTIMIZE_DEADELIM=n
+```
+
+### Using defconfig
+
+Create default configurations for different scenarios:
+
+```bash
+# Save current config as defconfig
+make savedefconfig
+
+# This creates 'defconfig' file with minimal settings
+```
+
+Load a defconfig:
+
+```bash
+make defconfig
+```
+
+### Custom Configuration Files
+
+Create named configurations:
+
+```bash
+# Save current config
+cp .config configs/myapp_prod.config
+
+# Load specific config
+cp configs/myapp_prod.config .config
+make oldconfig
+```
+
+## Kraftfile Configuration
+
+For kraft CLI users, specify Kconfig options in your Kraftfile:
+
+```yaml Kraftfile
+spec: v0.6
+
+kernel:
+  source: https://github.com/unikraft/unikraft.git
+  version: stable
+  kconfig:
+    # Architecture
+    - CONFIG_ARCH_X86_64=y
+    
+    # Optimization
+    - CONFIG_OPTIMIZE_PERF=y
+    - CONFIG_OPTIMIZE_DEADELIM=y
+    
+    # Debug
+    - CONFIG_DEBUG_SYMBOLS_LVL3=y
+    - CONFIG_OPTIMIZE_NOOMITFP=y
+
+libraries:
+  musl:
+    source: https://github.com/unikraft/lib-musl.git
+    version: stable
+    kconfig:
+      - CONFIG_LIBMUSL=y
+  
+  lwip:
+    source: https://github.com/unikraft/lib-lwip.git
+    version: stable
+    kconfig:
+      - CONFIG_LWIP_DHCP=y
+      - CONFIG_LWIP_DNS=y
+```
+
+## Advanced Configuration Topics
+
+### Conditional Configuration
+
+Some options depend on others:
+
+```
+Library Configuration  --->
+  [*] ukdebug: Debugging features  --->
+    [*] uklibparam: Kernel parameter parser (Required for GDB stub)
+    [ ] GDB stub support (depends on uklibparam)
+```
+
+### Configuration Conflicts
+
+Some options are mutually exclusive:
+
+```
+Build Options  --->
+  ( ) Optimize for performance (-O2)
+  (X) Optimize for size (-Os)         # Cannot enable both
+```
+
+### Configuration Validation
+
+After modifying `.config` manually, validate:
+
+```bash
+make oldconfig
+```
+
+This prompts for any new or conflicting options.
+
+## Configuration Tools
+
+### List All Options
+
+View all available configuration options:
+
+```bash
+make listnewconfig
+```
+
+### Search Configuration
+
+In menuconfig, press `/` to search:
+
+```
+Search for: OPTIMIZE
+```
+
+Results show location and dependencies.
+
+### Show Current Configuration
+
+```bash
+# Show all set options
+grep "^CONFIG_" .config
+
+# Show specific option
+grep CONFIG_OPTIMIZE_PERF .config
+```
+
+## Troubleshooting Configuration
+
+### Configuration Not Loading
+
+**Problem**: Changes to `.config` not taking effect
+
+**Solution**:
+```bash
+# Clean and rebuild
+make clean
+make oldconfig
+make
+```
+
+### Conflicting Options
+
+**Problem**: "Configuration is invalid" error
+
+**Solution**:
+```bash
+# Reset to defaults
+make defconfig
+
+# Or fix conflicts interactively
+make oldconfig
+```
+
+### Missing Dependencies
+
+**Problem**: Option not visible in menuconfig
+
+**Solution**: Check if dependencies are enabled. Press `?` on parent menu to see requirements.
+
+### menuconfig Crashes
+
+**Problem**: menuconfig exits with error
+
+**Solution**:
+```bash
+# Install required packages
+sudo apt-get install libncurses-dev  # Ubuntu/Debian
+sudo dnf install ncurses-devel       # Fedora/RHEL
+```
+
+## Configuration Best Practices
+
+### 1. Start with Defaults
+
+Begin with a working default configuration:
+
+```bash
+make defconfig
+make menuconfig  # Then customize
+```
+
+### 2. Document Your Configuration
+
+Add comments to your defconfig:
+
+```bash configs/production.config
+# Production configuration for MyApp
+# Optimized for size and security
+CONFIG_OPTIMIZE_SIZE=y
+CONFIG_OPTIMIZE_DEADELIM=y
+# ... more options ...
+```
+
+### 3. Version Control Configuration
+
+Commit your `.config` or defconfig:
+
+```bash
+git add .config
+git commit -m "Add production configuration"
+```
+
+### 4. Test Configuration Changes
+
+Always test after configuration changes:
+
+```bash
+make clean
+make -j$(nproc)
+kraft run .
+```
+
+### 5. Use Separate Configs for Different Environments
+
+```
+configs/
+├── development.config    # Debug symbols, no optimization
+├── testing.config        # Balanced
+└── production.config     # Optimized for performance/size
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Applications" href="/guides/building-applications" icon="hammer">
+    Apply your configuration and build unikernels
+  </Card>
+  <Card title="Running Unikernels" href="/guides/running-unikernels" icon="play">
+    Run your configured unikernels
+  </Card>
+  <Card title="Debugging" href="/guides/debugging" icon="bug">
+    Debug with proper configuration
+  </Card>
+  <Card title="Config.uk Reference" href="https://github.com/unikraft/unikraft/blob/staging/Config.uk" icon="file-code">
+    View complete Kconfig source
+  </Card>
+</CardGroup>

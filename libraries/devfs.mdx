@@ -1,0 +1,655 @@
+---
+title: Device File System
+description: Special filesystem providing access to character and block devices through /dev nodes in Unikraft
+---
+
+The `devfs` library implements a device filesystem that provides a standard `/dev` directory with device nodes for accessing hardware and pseudo-devices. It enables applications to interact with devices through familiar file operations.
+
+## Overview
+
+DevFS (Device File System) creates device files that act as interfaces to device drivers. Unlike regular filesystems that store data, devfs provides access points to device drivers, routing file operations (open, read, write, ioctl) to the appropriate driver handlers.
+
+### Key Features
+
+- **Standard /dev interface**: POSIX-compatible device nodes
+- **Dynamic device registration**: Devices can be registered at runtime
+- **Character and block devices**: Support for both device types
+- **Built-in devices**: Automatic registration of common devices (null, zero, stdout)
+- **Driver abstraction**: Clean separation between VFS and device drivers
+
+## Architecture
+
+### Core Components
+
+#### Device Information
+
+```c
+struct devinfo {
+    unsigned long  cookie;  // Index for iteration
+    struct device *id;      // Device identifier
+    int            flags;   // Device characteristics (D_CHR, D_BLK, etc.)
+    char           name[MAXDEVNAME]; // Device name
+};
+```
+
+#### Device Flags
+
+| Flag | Description |
+|------|-------------|
+| `D_CHR` | Character device (byte-stream) |
+| `D_BLK` | Block device (random access) |
+| `D_REM` | Removable device |
+| `D_TTY` | TTY/terminal device |
+
+#### Device Operations
+
+Each device driver implements a set of operations:
+
+```c
+struct devops {
+    devop_open_t  open;   // Open device
+    devop_close_t close;  // Close device
+    devop_read_t  read;   // Read from device
+    devop_write_t write;  // Write to device
+    devop_ioctl_t ioctl;  // Device control operations
+};
+```
+
+#### Driver Structure
+
+```c
+struct driver {
+    const char    *name;    // Driver name
+    struct devops *devops;  // Operations table
+    size_t        devsz;    // Private data size
+    int           flags;    // Driver state
+};
+```
+
+#### Device Structure
+
+```c
+struct device {
+    struct device *next;         // Linked list of devices
+    struct driver *driver;       // Associated driver
+    char          name[MAXDEVNAME]; // Device name
+    int           flags;         // D_* flags
+    int           active;        // 1 if active, 0 if inactive
+    int           refcnt;        // Reference count
+    void          *private_data; // Driver-specific data
+};
+```
+
+## Configuration
+
+### Enable DevFS
+
+```console
+$ kraft menuconfig
+```
+
+Navigate to: **Library Configuration → devfs: devfs file system**
+
+### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `LIBDEVFS_AUTOMOUNT` | Mount /dev during boot | No |
+| `LIBDEVFS_DEV_NULL` | Register null device | Yes (if automount) |
+| `LIBDEVFS_DEV_ZERO` | Register zero device | Yes (if automount) |
+| `LIBDEVFS_DEV_STDOUT` | Register stdout device | Yes (if automount) |
+| `LIBDEVFS_MAXDEVNAME` | Maximum device name length | 256 |
+
+### Auto-mount Configuration
+
+Enable automatic `/dev` mounting:
+
+```kconfig
+CONFIG_LIBDEVFS_AUTOMOUNT=y
+```
+
+This will automatically mount devfs at `/dev` during boot and register configured devices.
+
+## Built-in Devices
+
+### /dev/null
+
+The null device discards all data written to it and returns EOF on reads:
+
+```c
+#include <fcntl.h>
+#include <unistd.h>
+
+int fd = open("/dev/null", O_WRONLY);
+write(fd, "This data disappears", 20); // Data is discarded
+close(fd);
+
+fd = open("/dev/null", O_RDONLY);
+char buf[10];
+ssize_t n = read(fd, buf, sizeof(buf)); // Returns 0 (EOF)
+close(fd);
+```
+
+### /dev/zero
+
+The zero device produces an infinite stream of zero bytes:
+
+```c
+int fd = open("/dev/zero", O_RDONLY);
+char buf[1024];
+ssize_t n = read(fd, buf, sizeof(buf)); // Fills buffer with zeros
+close(fd);
+
+// Common use: Zero-initialize memory
+int fd = open("/dev/zero", O_RDONLY);
+char *mem = malloc(4096);
+read(fd, mem, 4096); // Faster than memset in some cases
+close(fd);
+```
+
+### /dev/stdout
+
+Redirects writes to the console output:
+
+```c
+int fd = open("/dev/stdout", O_WRONLY);
+write(fd, "Hello, console!\n", 16); // Appears on console
+close(fd);
+```
+
+## Usage
+
+### Manual Mounting
+
+If auto-mount is disabled, mount devfs manually:
+
+```c
+#include <sys/mount.h>
+
+int main(void)
+{
+    int rc = mount(NULL, "/dev", "devfs", 0, NULL);
+    if (rc < 0) {
+        perror("Failed to mount devfs");
+        return 1;
+    }
+
+    // Now /dev is available
+    int fd = open("/dev/null", O_WRONLY);
+    // ...
+
+    return 0;
+}
+```
+
+### Using Devices
+
+Standard POSIX file operations work with device files:
+
+```c
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+
+int main(void)
+{
+    int fd;
+
+    // Open device
+    fd = open("/dev/mydevice", O_RDWR);
+    if (fd < 0) {
+        perror("open failed");
+        return 1;
+    }
+
+    // Read from device
+    char buf[256];
+    ssize_t n = read(fd, buf, sizeof(buf));
+
+    // Write to device
+    write(fd, "command", 7);
+
+    // Device-specific control
+    int cmd = 42;
+    ioctl(fd, SOME_IOCTL_CMD, &cmd);
+
+    // Close device
+    close(fd);
+
+    return 0;
+}
+```
+
+### Listing Devices
+
+Enumerate available devices:
+
+```c
+#include <dirent.h>
+#include <stdio.h>
+
+void list_devices(void)
+{
+    DIR *dir = opendir("/dev");
+    if (!dir) {
+        perror("opendir failed");
+        return;
+    }
+
+    struct dirent *ent;
+    printf("Available devices:\n");
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") != 0 && 
+            strcmp(ent->d_name, "..") != 0) {
+            printf("  /dev/%s\n", ent->d_name);
+        }
+    }
+
+    closedir(dir);
+}
+```
+
+## Creating Custom Devices
+
+### Define Device Operations
+
+```c
+#include <devfs/device.h>
+#include <vfscore/uio.h>
+
+// Device state
+struct mydev_data {
+    char buffer[1024];
+    size_t size;
+};
+
+// Open handler
+static int mydev_open(struct device *dev, int flags)
+{
+    uk_pr_info("Device %s opened\n", dev->name);
+    return 0;
+}
+
+// Close handler
+static int mydev_close(struct device *dev)
+{
+    uk_pr_info("Device %s closed\n", dev->name);
+    return 0;
+}
+
+// Read handler
+static int mydev_read(struct device *dev, struct uio *uio, int flags)
+{
+    struct mydev_data *data = dev->private_data;
+    size_t len = MIN(uio->uio_resid, data->size);
+
+    if (len > 0) {
+        int rc = uiomove(data->buffer, len, uio);
+        if (rc)
+            return rc;
+        data->size -= len;
+    }
+
+    return 0;
+}
+
+// Write handler
+static int mydev_write(struct device *dev, struct uio *uio, int flags)
+{
+    struct mydev_data *data = dev->private_data;
+    size_t len = MIN(uio->uio_resid, sizeof(data->buffer) - data->size);
+
+    if (len > 0) {
+        int rc = uiomove(data->buffer + data->size, len, uio);
+        if (rc)
+            return rc;
+        data->size += len;
+    }
+
+    return 0;
+}
+
+// IOCTL handler
+static int mydev_ioctl(struct device *dev, unsigned long cmd, void *arg)
+{
+    struct mydev_data *data = dev->private_data;
+
+    switch (cmd) {
+    case 1: // Clear buffer
+        data->size = 0;
+        return 0;
+    case 2: // Get buffer size
+        *(size_t *)arg = data->size;
+        return 0;
+    default:
+        return EINVAL;
+    }
+}
+
+// Device operations table
+static struct devops mydev_ops = {
+    .open  = mydev_open,
+    .close = mydev_close,
+    .read  = mydev_read,
+    .write = mydev_write,
+    .ioctl = mydev_ioctl
+};
+```
+
+### Register Device Driver
+
+```c
+// Driver definition
+static struct driver mydev_driver = {
+    .name   = "mydev",
+    .devops = &mydev_ops,
+    .devsz  = sizeof(struct mydev_data), // Allocated per device
+    .flags  = 0
+};
+
+// Create device instance
+static int mydev_init(void)
+{
+    struct device *dev;
+    int rc;
+
+    rc = device_create(&mydev_driver, "mydevice", D_CHR, &dev);
+    if (rc) {
+        uk_pr_err("Failed to create device: %d\n", rc);
+        return rc;
+    }
+
+    uk_pr_info("Device /dev/mydevice registered\n");
+    return 0;
+}
+
+// Register at boot
+uk_rootfs_initcall(mydev_init);
+```
+
+### Using Custom Device
+
+```c
+int main(void)
+{
+    int fd = open("/dev/mydevice", O_RDWR);
+    if (fd < 0) {
+        perror("open failed");
+        return 1;
+    }
+
+    // Write to device
+    write(fd, "Hello device!", 13);
+
+    // Read back
+    char buf[100];
+    lseek(fd, 0, SEEK_SET);
+    ssize_t n = read(fd, buf, sizeof(buf));
+    buf[n] = '\0';
+    printf("Read: %s\n", buf);
+
+    // Clear buffer via ioctl
+    ioctl(fd, 1, NULL);
+
+    // Get size via ioctl
+    size_t size;
+    ioctl(fd, 2, &size);
+    printf("Buffer size: %zu\n", size);
+
+    close(fd);
+    return 0;
+}
+```
+
+## Use Cases
+
+### Console Redirection
+
+Redirect output to /dev/null to suppress messages:
+
+```c
+#include <unistd.h>
+#include <fcntl.h>
+
+void silence_output(void)
+{
+    int null_fd = open("/dev/null", O_WRONLY);
+    if (null_fd >= 0) {
+        dup2(null_fd, STDOUT_FILENO); // Redirect stdout
+        dup2(null_fd, STDERR_FILENO); // Redirect stderr
+        close(null_fd);
+    }
+}
+```
+
+### Zero-initialization
+
+Use /dev/zero for efficient memory initialization:
+
+```c
+void *alloc_zeroed_memory(size_t size)
+{
+    void *mem = malloc(size);
+    if (!mem)
+        return NULL;
+
+    int fd = open("/dev/zero", O_RDONLY);
+    if (fd >= 0) {
+        read(fd, mem, size);
+        close(fd);
+    }
+
+    return mem;
+}
+```
+
+### Device Abstraction
+
+Create abstract device interfaces:
+
+```c
+// Serial device abstraction
+int serial_fd;
+
+void serial_init(void)
+{
+    serial_fd = open("/dev/serial0", O_RDWR);
+}
+
+void serial_write(const char *data, size_t len)
+{
+    write(serial_fd, data, len);
+}
+
+ssize_t serial_read(char *buf, size_t len)
+{
+    return read(serial_fd, buf, len);
+}
+```
+
+### Hardware Access
+
+Access hardware through device nodes:
+
+```c
+// GPIO device
+void gpio_set_pin(int pin, int value)
+{
+    int fd = open("/dev/gpio", O_WRONLY);
+    if (fd >= 0) {
+        struct gpio_cmd cmd = { .pin = pin, .value = value };
+        ioctl(fd, GPIO_SET_CMD, &cmd);
+        close(fd);
+    }
+}
+
+// SPI device
+ssize_t spi_transfer(const void *tx, void *rx, size_t len)
+{
+    int fd = open("/dev/spi0", O_RDWR);
+    if (fd < 0)
+        return -1;
+
+    struct spi_transfer xfer = {
+        .tx_buf = tx,
+        .rx_buf = rx,
+        .len = len
+    };
+
+    int rc = ioctl(fd, SPI_IOC_TRANSFER, &xfer);
+    close(fd);
+    return rc;
+}
+```
+
+### Testing and Debugging
+
+Use devices for test infrastructure:
+
+```c
+void test_file_redirection(void)
+{
+    // Save original stdout
+    int saved_stdout = dup(STDOUT_FILENO);
+
+    // Redirect to /dev/null
+    int null_fd = open("/dev/null", O_WRONLY);
+    dup2(null_fd, STDOUT_FILENO);
+
+    // This output is suppressed
+    printf("This won't appear\n");
+
+    // Restore stdout
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(null_fd);
+    close(saved_stdout);
+
+    // This output appears
+    printf("This will appear\n");
+}
+```
+
+## Advanced Topics
+
+### Device Reference Counting
+
+DevFS automatically manages device reference counts:
+
+```c
+// First open: refcnt = 1
+int fd1 = open("/dev/mydevice", O_RDWR);
+
+// Second open: refcnt = 2
+int fd2 = open("/dev/mydevice", O_RDWR);
+
+// First close: refcnt = 1
+close(fd1);
+
+// Second close: refcnt = 0, device can be removed
+close(fd2);
+```
+
+### Protected Devices
+
+Mark devices as protected to prevent unauthorized access:
+
+```c
+static int create_protected_device(void)
+{
+    struct device *dev;
+    int rc;
+
+    rc = device_create(&driver, "protected", D_CHR, &dev);
+    if (rc)
+        return rc;
+
+    // Mark as protected (requires VPROTDEV flag in vnode)
+    dev->flags |= D_PROTECTED;
+
+    return 0;
+}
+```
+
+### Device Removal
+
+Remove devices dynamically:
+
+```c
+int device_destroy(struct device *dev);
+```
+
+**Note:** Device can only be removed when reference count is zero.
+
+## Performance Considerations
+
+### Device Access Patterns
+
+- **Character devices**: Optimized for sequential, byte-stream access
+- **Block devices**: Optimized for random, block-sized access
+- **Direct vs. buffered**: Consider buffering for small, frequent operations
+
+### Optimization Tips
+
+1. **Batch operations**: Combine multiple small I/O operations
+2. **Use ioctl**: Prefer ioctl for control operations over read/write
+3. **Minimize opens**: Keep device open if used frequently
+4. **Buffer management**: Implement appropriate buffering in driver
+
+## Best Practices
+
+1. **Mount /dev early**: Use auto-mount or mount in initialization
+2. **Check device existence**: Verify device files exist before opening
+3. **Handle errors**: Device operations can fail; always check return values
+4. **Close devices**: Always close device file descriptors when done
+5. **Use standard devices**: Leverage built-in devices (null, zero) where possible
+6. **Document ioctls**: Clearly document custom ioctl commands and parameters
+
+## Troubleshooting
+
+### Device Not Found
+
+**Error:** "No such file or directory" when opening `/dev/device`
+
+**Solutions:**
+1. Verify devfs is mounted: `mount | grep devfs`
+2. Enable auto-mount in configuration
+3. Check device is registered: `ls /dev`
+4. Ensure device driver is loaded
+
+### Permission Denied
+
+**Error:** Cannot open device
+
+**Solutions:**
+1. Check device is not protected (VPROTDEV flag)
+2. Verify device is active
+3. Ensure proper open flags
+
+### Device Busy
+
+**Error:** Device cannot be removed
+
+**Cause:** Reference count > 0 (device still open)
+
+**Solution:** Close all file descriptors to the device before removal
+
+## Comparison with Other Systems
+
+| Feature | Unikraft devfs | Linux /dev | FreeBSD devfs |
+|---------|----------------|------------|---------------|
+| Dynamic devices | Yes | Yes | Yes |
+| Device nodes | In-memory | Persistent | In-memory |
+| Hot-plug | Yes | Yes | Yes |
+| Permissions | Basic | Full | Full |
+| Special files | Char, Block | Char, Block, FIFO, Socket | Char, Block |
+
+## Related Libraries
+
+- [posix-vfs](/libraries/vfs) - Virtual file system layer
+- [ramfs](/libraries/ramfs) - RAM-based filesystem
+- [9pfs](/libraries/9pfs) - Network filesystem
+
+## References
+
+- Source: `lib/devfs/` in Unikraft repository
+- Header: `lib/devfs/include/devfs/device.h`

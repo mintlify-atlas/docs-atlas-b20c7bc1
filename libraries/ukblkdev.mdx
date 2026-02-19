@@ -1,0 +1,559 @@
+---
+title: ukblkdev
+description: Block device API for Unikraft
+---
+
+## Overview
+
+The `ukblkdev` library provides a generalized interface between block device drivers and low-level applications that need to communicate with block devices in Unikraft. It abstracts block device operations and provides a consistent API for reading, writing, and managing block devices.
+
+The library is derived from `uknetdev` for consistency and provides a clean separation between device drivers and applications, supporting multiple block device backends.
+
+## Architecture
+
+### Device States
+
+Block devices in Unikraft progress through four states:
+
+1. **UK_BLKDEV_UNCONFIGURED** - Initial state after registration
+2. **UK_BLKDEV_CONFIGURED** - After device and queue configuration
+3. **UK_BLKDEV_RUNNING** - Device started and operational
+4. **UK_BLKDEV_INVALID** - Device in invalid state
+
+### Core Components
+
+- **uk_blkdev** - Main device structure containing operations and capabilities
+- **uk_blkreq** - Block request structure for I/O operations
+- **Queues** - Unified queues for both requests and responses
+- **Device Operations** - Function pointers for driver-specific implementations
+
+## Device Initialization
+
+Devices must be initialized in the following order:
+
+```c
+#include <uk/blkdev.h>
+
+// 1. Get device reference
+struct uk_blkdev *dev = uk_blkdev_get(0);
+
+// 2. Configure device
+struct uk_blkdev_conf conf = {
+    .nb_queues = 1
+};
+int ret = uk_blkdev_configure(dev, &conf);
+if (ret < 0)
+    return ret;
+
+// 3. Configure queue
+struct uk_blkdev_queue_conf qconf = {
+    .a = allocator,
+    .callback = queue_callback,
+    .callback_cookie = NULL
+};
+ret = uk_blkdev_queue_configure(dev, 0, 128, &qconf);
+if (ret < 0)
+    return ret;
+
+// 4. Start the device
+ret = uk_blkdev_start(dev);
+if (ret < 0)
+    return ret;
+```
+
+## Key API Functions
+
+### Device Management
+
+#### uk_blkdev_count
+```c
+unsigned int uk_blkdev_count(void);
+```
+Returns the number of available block devices.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:83`
+
+#### uk_blkdev_get
+```c
+struct uk_blkdev *uk_blkdev_get(unsigned int id);
+```
+Gets a reference to a block device by ID. Valid IDs are in range `[0, n-1]` where n is the device count. This reference should be saved and used for subsequent API calls.
+
+**Returns:**
+- `NULL` - Device not found
+- Pointer to device structure on success
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:96`
+
+#### uk_blkdev_configure
+```c
+int uk_blkdev_configure(struct uk_blkdev *dev,
+                        const struct uk_blkdev_conf *conf);
+```
+Configures a block device with the specified number of queues. Must be invoked before any other operations.
+
+**Returns:**
+- `0` - Success
+- `<0` - Error code from driver
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:160`
+
+#### uk_blkdev_start
+```c
+int uk_blkdev_start(struct uk_blkdev *dev);
+```
+Starts a configured block device. After success, all operational functions can be invoked.
+
+**Returns:**
+- `0` - Success
+- `<0` - Error code from driver
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:222`
+
+#### uk_blkdev_stop
+```c
+int uk_blkdev_stop(struct uk_blkdev *dev);
+```
+Stops a running block device and transitions it to configured state. Returns `-EBUSY` if there are pending requests.
+
+**Returns:**
+- `0` - Success
+- `-EBUSY` - Pending requests exist
+- `<0` - Error from driver
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:492`
+
+### Device Information
+
+#### uk_blkdev_get_info
+```c
+int uk_blkdev_get_info(struct uk_blkdev *dev,
+                       struct uk_blkdev_info *dev_info);
+```
+Queries device capabilities, such as maximum number of supported queues.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:144`
+
+#### uk_blkdev_capabilities
+```c
+static inline const struct uk_blkdev_cap *
+uk_blkdev_capabilities(struct uk_blkdev *blkdev);
+```
+Returns device capabilities including sector size, total sectors, and I/O alignment requirements. Device must be in `UK_BLKDEV_RUNNING` state.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:235`
+
+**Capability macros:**
+```c
+// Get sector size in bytes
+#define uk_blkdev_ssize(blkdev)
+
+// Get maximum sectors per request
+#define uk_blkdev_max_sec_per_req(blkdev)
+
+// Get access mode (O_RDONLY, O_RDWR, O_WRONLY)
+#define uk_blkdev_mode(blkdev)
+
+// Get total number of sectors
+#define uk_blkdev_sectors(blkdev)
+
+// Get total device size in bytes
+#define uk_blkdev_size(blkdev)
+
+// Get I/O alignment requirement
+#define uk_blkdev_ioalign(blkdev)
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:244-260`
+
+### Queue Management
+
+#### uk_blkdev_queue_get_info
+```c
+int uk_blkdev_queue_get_info(struct uk_blkdev *dev, uint16_t queue_id,
+                             struct uk_blkdev_queue_info *q_info);
+```
+Queries queue capabilities, such as descriptor limitations.
+
+**Parameters:**
+- `dev` - Device in configured state
+- `queue_id` - Queue index `[0, nb_queues-1]`
+- `q_info` - Structure to fill with queue information
+
+**Returns:**
+- `0` - Success
+- `<0` - Error code
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:180`
+
+#### uk_blkdev_queue_configure
+```c
+int uk_blkdev_queue_configure(struct uk_blkdev *dev, uint16_t queue_id,
+                              uint16_t nb_desc,
+                              const struct uk_blkdev_queue_conf *queue_conf);
+```
+Allocates and sets up a queue for requests and responses.
+
+**Parameters:**
+- `dev` - Device in configured state
+- `queue_id` - Queue index `[0, nb_queues-1]`
+- `nb_desc` - Number of descriptors
+- `queue_conf` - Queue configuration including allocator and callback
+
+**Returns:**
+- `0` - Success
+- `<0` - Error code
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:203`
+
+#### uk_blkdev_queue_unconfigure
+```c
+int uk_blkdev_queue_unconfigure(struct uk_blkdev *dev, uint16_t queue_id);
+```
+Frees a queue and its descriptors.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:506`
+
+### Interrupt Management
+
+#### uk_blkdev_queue_intr_enable / uk_blkdev_queue_intr_disable
+```c
+static inline int uk_blkdev_queue_intr_enable(struct uk_blkdev *dev,
+                                              uint16_t queue_id);
+static inline int uk_blkdev_queue_intr_disable(struct uk_blkdev *dev,
+                                               uint16_t queue_id);
+```
+Enables or disables interrupts for a specific queue.
+
+**Returns:**
+- `0` - Success
+- `-ENOTSUP` - Driver doesn't support interrupts
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:274`, `lib/ukblkdev/include/uk/blkdev.h:302`
+
+### I/O Operations
+
+#### uk_blkdev_queue_submit_one
+```c
+int uk_blkdev_queue_submit_one(struct uk_blkdev *dev, uint16_t queue_id,
+                                struct uk_blkreq *req);
+```
+Submits an asynchronous I/O request to the device queue.
+
+**Returns:** Status flags (combination of):
+- `UK_BLKDEV_STATUS_SUCCESS` - Request queued successfully
+- `UK_BLKDEV_STATUS_MORE` - Queue has space for more requests
+- `<0` - Error from driver
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:338`
+
+**Example:**
+```c
+struct uk_blkreq req;
+int status;
+
+uk_blkreq_init(&req, UK_BLKREQ_READ, start_sector, 
+               nb_sectors, buffer, callback, cookie);
+
+status = uk_blkdev_queue_submit_one(dev, queue_id, &req);
+if (uk_blkdev_status_successful(status)) {
+    // Request submitted successfully
+}
+```
+
+#### uk_blkdev_queue_finish_reqs
+```c
+int uk_blkdev_queue_finish_reqs(struct uk_blkdev *dev, uint16_t queue_id);
+```
+Processes responses from the queue and re-enables interrupts if they were previously enabled.
+
+**Returns:**
+- `0` - Success
+- `<0` - Error from driver
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:425`
+
+#### uk_blkdev_sync_io (Optional)
+```c
+int uk_blkdev_sync_io(struct uk_blkdev *dev, uint16_t queue_id,
+                      enum uk_blkreq_op op, __sector sector,
+                      __sector nb_sectors, void *buf);
+```
+Performs synchronous I/O operation. Only available when `CONFIG_LIBUKBLKDEV_SYNC_IO_BLOCKED_WAITING` is enabled. Note: `uk_blkdev_queue_finish_reqs()` must be called from interrupt or another thread context.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:449`
+
+**Convenience macros:**
+```c
+#define uk_blkdev_sync_read(blkdev, queue_id, sector, nb_sectors, buf)
+#define uk_blkdev_sync_write(blkdev, queue_id, sector, nb_sectors, buf)
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:467`, `lib/ukblkdev/include/uk/blkdev.h:459`
+
+## Block Requests (uk_blkreq)
+
+### Request Structure
+
+The `uk_blkreq` structure describes a block I/O operation:
+
+```c
+struct uk_blkreq {
+    // Input members
+    enum uk_blkreq_op operation;     // READ, WRITE, or FFLUSH
+    __sector start_sector;           // Starting sector
+    __sector nb_sectors;             // Number of sectors
+    void *aio_buf;                   // Data buffer
+    uk_blkreq_event_t cb;           // Completion callback
+    void *cb_cookie;                 // Callback parameter
+    
+    // Output members
+    __atomic state;                  // FINISHED or UNFINISHED
+    int result;                      // Result status (< 0 on error)
+};
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkreq.h:88`
+
+### Request Operations
+
+#### Operation Types
+```c
+enum uk_blkreq_op {
+    UK_BLKREQ_READ = 0,   // Read operation
+    UK_BLKREQ_WRITE,      // Write operation
+    UK_BLKREQ_FFLUSH = 4  // Flush volatile write cache
+};
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkreq.h:66`
+
+#### uk_blkreq_init
+```c
+static inline void uk_blkreq_init(struct uk_blkreq *req,
+                                  enum uk_blkreq_op op,
+                                  __sector start, __sector nb_sectors,
+                                  void *aio_buf,
+                                  uk_blkreq_event_t cb, void *cb_cookie);
+```
+Initializes a request structure with the given parameters.
+
+**Source:** `lib/ukblkdev/include/uk/blkreq.h:128`
+
+#### uk_blkreq_is_done
+```c
+#define uk_blkreq_is_done(req)
+```
+Checks if a request has completed.
+
+**Source:** `lib/ukblkdev/include/uk/blkreq.h:147`
+
+### Request Callbacks
+
+Completion callbacks have the following signature:
+
+```c
+typedef void (*uk_blkreq_event_t)(struct uk_blkreq *req, void *cb_cookie);
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkreq.h:83`
+
+## Driver API
+
+For implementing block device drivers, use the functions in `uk/blkdev_driver.h`:
+
+### uk_blkdev_drv_register
+```c
+int uk_blkdev_drv_register(struct uk_blkdev *dev, struct uk_alloc *a,
+                           const char *drv_name);
+```
+Registers a block device with the API. Returns the device ID on success or `-ENOMEM` on failure.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev_driver.h:67`
+
+### uk_blkdev_drv_queue_event
+```c
+static inline void uk_blkdev_drv_queue_event(struct uk_blkdev *dev,
+                                             uint16_t queue_id);
+```
+Forwards a queue event to the API user. Should be called from interrupt context.
+
+**Source:** `lib/ukblkdev/include/uk/blkdev_driver.h:79`
+
+### uk_blkreq_finished
+```c
+#define uk_blkreq_finished(req)
+```
+Marks a request as finished (used by drivers).
+
+**Source:** `lib/ukblkdev/include/uk/blkdev_driver.h:104`
+
+## Status Helpers
+
+The API provides macros for testing operation status:
+
+```c
+// Test if specific flags are set
+uk_blkdev_status_test_set(status, flag)
+
+// Test if flags are unset
+uk_blkdev_status_test_unset(status, flag)
+
+// Test if operation was successful
+uk_blkdev_status_successful(status)
+
+// Test if operation should be retried
+uk_blkdev_status_notready(status)
+
+// Test if more operations can be performed
+uk_blkdev_status_more(status)
+```
+
+**Source:** `lib/ukblkdev/include/uk/blkdev.h:354-411`
+
+## Configuration Options
+
+Key configuration macros:
+- `CONFIG_LIBUKBLKDEV_MAXNBQUEUES` - Maximum number of queues per device
+- `CONFIG_LIBUKBLKDEV_DISPATCHERTHREADS` - Enable dispatcher threads for events
+- `CONFIG_LIBUKBLKDEV_SYNC_IO_BLOCKED_WAITING` - Enable synchronous I/O functions
+
+## Usage Example
+
+Complete example of performing asynchronous I/O:
+
+```c
+#include <uk/blkdev.h>
+#include <uk/blkreq.h>
+
+static void read_complete(struct uk_blkreq *req, void *cookie)
+{
+    if (req->result < 0) {
+        uk_pr_err("Read failed: %d\n", req->result);
+    } else {
+        uk_pr_info("Read completed: %d sectors\n", req->nb_sectors);
+        // Process data in req->aio_buf
+    }
+}
+
+static void queue_callback(struct uk_blkdev *dev, uint16_t queue_id,
+                          void *argp)
+{
+    // Process completed requests
+    uk_blkdev_queue_finish_reqs(dev, queue_id);
+}
+
+int perform_async_read(struct uk_blkdev *dev, uint16_t queue_id)
+{
+    struct uk_blkreq req;
+    void *buffer;
+    int status;
+    
+    // Allocate aligned buffer
+    size_t sector_size = uk_blkdev_ssize(dev);
+    size_t align = uk_blkdev_ioalign(dev);
+    buffer = uk_memalign(uk_alloc_get_default(), align, 
+                         sector_size * 8);
+    if (!buffer)
+        return -ENOMEM;
+    
+    // Initialize request to read 8 sectors
+    uk_blkreq_init(&req, UK_BLKREQ_READ, 0, 8, buffer,
+                   read_complete, NULL);
+    
+    // Submit request
+    status = uk_blkdev_queue_submit_one(dev, queue_id, &req);
+    if (!uk_blkdev_status_successful(status)) {
+        uk_free(uk_alloc_get_default(), buffer);
+        return -EIO;
+    }
+    
+    // Request is now in flight, callback will be invoked on completion
+    return 0;
+}
+
+int setup_block_device(struct uk_alloc *a)
+{
+    struct uk_blkdev *dev;
+    struct uk_blkdev_conf conf;
+    struct uk_blkdev_queue_conf qconf;
+    const struct uk_blkdev_cap *cap;
+    int ret;
+    
+    // Get first block device
+    if (uk_blkdev_count() == 0)
+        return -ENODEV;
+    
+    dev = uk_blkdev_get(0);
+    
+    // Configure device with one queue
+    conf.nb_queues = 1;
+    ret = uk_blkdev_configure(dev, &conf);
+    if (ret < 0)
+        return ret;
+    
+    // Configure queue
+    qconf.a = a;
+    qconf.callback = queue_callback;
+    qconf.callback_cookie = NULL;
+    
+    ret = uk_blkdev_queue_configure(dev, 0, 128, &qconf);
+    if (ret < 0)
+        return ret;
+    
+    // Start device
+    ret = uk_blkdev_start(dev);
+    if (ret < 0)
+        return ret;
+    
+    // Print device information
+    cap = uk_blkdev_capabilities(dev);
+    uk_pr_info("Block device: %lu sectors, %zu bytes/sector\n",
+               cap->sectors, cap->ssize);
+    uk_pr_info("Total size: %zu MB\n",
+               uk_blkdev_size(dev) / (1024 * 1024));
+    
+    // Enable interrupts
+    uk_blkdev_queue_intr_enable(dev, 0);
+    
+    return 0;
+}
+```
+
+## Example: Synchronous I/O
+
+When `CONFIG_LIBUKBLKDEV_SYNC_IO_BLOCKED_WAITING` is enabled:
+
+```c
+int perform_sync_read(struct uk_blkdev *dev)
+{
+    void *buffer;
+    size_t sector_size = uk_blkdev_ssize(dev);
+    size_t align = uk_blkdev_ioalign(dev);
+    int ret;
+    
+    buffer = uk_memalign(uk_alloc_get_default(), align,
+                         sector_size * 8);
+    if (!buffer)
+        return -ENOMEM;
+    
+    // Synchronous read of 8 sectors
+    ret = uk_blkdev_sync_read(dev, 0, 0, 8, buffer);
+    if (ret < 0) {
+        uk_pr_err("Sync read failed: %d\n", ret);
+        uk_free(uk_alloc_get_default(), buffer);
+        return ret;
+    }
+    
+    // Data is now available in buffer
+    process_data(buffer, sector_size * 8);
+    
+    uk_free(uk_alloc_get_default(), buffer);
+    return 0;
+}
+```
+
+## See Also
+
+- [uknetdev](/libraries/uknetdev) - Network device API
+- [virtio](/libraries/virtio) - VirtIO library for paravirtualized devices

@@ -1,0 +1,569 @@
+---
+title: Building Applications with Unikraft
+description: Learn how to build unikernel applications using kraft CLI and make-based workflows
+---
+
+## Overview
+
+Unikraft provides two primary ways to build unikernel applications:
+
+1. **kraft CLI** (Recommended) - Modern, user-friendly command-line tool
+2. **GNU Make** - Advanced, low-level build system for fine-grained control
+
+This guide covers both approaches, helping you choose the right workflow for your needs.
+
+## Building with kraft CLI
+
+The `kraft` command-line tool provides the simplest way to build Unikraft applications.
+
+### Installation
+
+<CodeGroup>
+
+```bash macOS
+brew install unikraft/cli/kraftkit
+```
+
+```bash Linux
+curl -sSfL https://get.kraftkit.sh | sh
+```
+
+```bash Windows
+curl -sSfL https://get.kraftkit.sh | sh
+```
+
+</CodeGroup>
+
+Verify your installation:
+
+```bash
+kraft --version
+```
+
+### Quick Start: Building Your First Unikernel
+
+<Steps>
+
+<Step title="Create a Kraftfile">
+
+Create a `Kraftfile` in your project directory. This example uses an existing Dockerfile:
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/path/to/my-server-app"]
+```
+
+</Step>
+
+<Step title="Build the unikernel">
+
+Run the build command in your project directory:
+
+```bash
+kraft build
+```
+
+This command will:
+- Parse your Kraftfile configuration
+- Download required runtime and dependencies
+- Build the root filesystem from your Dockerfile
+- Compile the unikernel image
+
+</Step>
+
+<Step title="Verify the build">
+
+Check the build output:
+
+```bash
+kraft ps
+```
+
+Your built image will appear in the list of available unikernels.
+
+</Step>
+
+</Steps>
+
+### Building from Pre-built Images
+
+For common applications, you can use pre-built community images:
+
+```bash
+# View available images
+kraft pkg ls --update --apps
+
+# Run a pre-built image directly
+kraft run unikraft.org/helloworld:latest
+```
+
+### Building Language-Specific Applications
+
+<CodeGroup>
+
+```yaml C/C++
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: |
+  FROM alpine:latest AS build
+  RUN apk add --no-cache gcc musl-dev
+  COPY . /src
+  WORKDIR /src
+  RUN gcc -o app main.c
+  
+  FROM scratch
+  COPY --from=build /src/app /app
+
+cmd: ["/app"]
+```
+
+```yaml Go
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: |
+  FROM golang:1.21-alpine AS build
+  WORKDIR /src
+  COPY . .
+  RUN go build -o server .
+  
+  FROM scratch
+  COPY --from=build /src/server /server
+
+cmd: ["/server"]
+```
+
+```yaml Python
+spec: v0.6
+
+runtime: python:3.10
+
+rootfs: |
+  FROM python:3.10-alpine
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip install -r requirements.txt
+  COPY . .
+
+cmd: ["python", "/app/server.py"]
+```
+
+```yaml Rust
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: |
+  FROM rust:1.70-alpine AS build
+  WORKDIR /src
+  COPY . .
+  RUN cargo build --release
+  
+  FROM scratch
+  COPY --from=build /src/target/release/app /app
+
+cmd: ["/app"]
+```
+
+</CodeGroup>
+
+### Build Options and Configuration
+
+#### Specifying Target Architecture
+
+```bash
+# Build for x86_64 (default)
+kraft build --arch x86_64
+
+# Build for ARM64
+kraft build --arch arm64
+```
+
+#### Specifying Target Platform
+
+```bash
+# Build for QEMU (default)
+kraft build --plat qemu
+
+# Build for KVM
+kraft build --plat kvm
+
+# Build for Xen
+kraft build --plat xen
+```
+
+#### Debug vs Release Builds
+
+```bash
+# Debug build (default, includes debug symbols)
+kraft build
+
+# Release build (optimized)
+kraft build --no-debug
+```
+
+### Advanced Build Workflows
+
+<Steps>
+
+<Step title="Clean previous builds">
+
+```bash
+kraft clean
+```
+
+This removes all build artifacts and cached files.
+
+</Step>
+
+<Step title="Build with custom configuration">
+
+Create a more complex Kraftfile with multiple targets:
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+targets:
+  - name: qemu-x86_64
+    architecture: x86_64
+    platform: qemu
+  - name: kvm-arm64
+    architecture: arm64
+    platform: kvm
+
+rootfs: ./Dockerfile
+
+cmd: ["/app/server"]
+```
+
+Build specific target:
+
+```bash
+kraft build --target qemu-x86_64
+```
+
+</Step>
+
+<Step title="View build logs">
+
+```bash
+kraft build --log-level debug
+```
+
+This provides detailed build information useful for troubleshooting.
+
+</Step>
+
+</Steps>
+
+## Building with GNU Make
+
+For advanced users who need fine-grained control over the build process, Unikraft supports GNU Make-based builds.
+
+### Prerequisites
+
+- GNU Make >= 4.1
+- GCC or Clang compiler
+- Development libraries (depending on your application)
+
+### Make-Based Build Workflow
+
+<Steps>
+
+<Step title="Set up directory structure">
+
+Organize your project:
+
+```
+my-app/
+├── unikraft/          # Unikraft core (git submodule)
+├── libs/              # External libraries
+│   ├── lib1/
+│   └── lib2/
+├── apps/              # Your application
+│   └── myapp/
+│       ├── Makefile.uk
+│       ├── Config.uk
+│       └── main.c
+└── Makefile           # Top-level Makefile
+```
+
+</Step>
+
+<Step title="Create top-level Makefile">
+
+```makefile Makefile
+UK_ROOT ?= $(PWD)/unikraft
+UK_LIBS ?= $(PWD)/libs
+UK_BUILD ?= $(PWD)/build
+
+APPS ?= $(PWD)/apps
+APP := $(APPS)/myapp
+
+all:
+	@$(MAKE) -C $(UK_ROOT) A=$(APP) L=$(UK_LIBS) O=$(UK_BUILD)
+
+menuconfig:
+	@$(MAKE) -C $(UK_ROOT) A=$(APP) L=$(UK_LIBS) O=$(UK_BUILD) menuconfig
+
+clean:
+	@$(MAKE) -C $(UK_ROOT) A=$(APP) L=$(UK_LIBS) O=$(UK_BUILD) clean
+```
+
+</Step>
+
+<Step title="Configure the build">
+
+Use menuconfig to configure your build:
+
+```bash
+make menuconfig
+```
+
+This opens an interactive configuration menu where you can:
+- Select target architecture (x86_64, ARM64, ARM)
+- Choose platform (KVM, QEMU, Xen)
+- Configure optimization levels
+- Enable/disable libraries and features
+- Set debug options
+
+</Step>
+
+<Step title="Build the unikernel">
+
+```bash
+make -j$(nproc)
+```
+
+The `-j$(nproc)` flag enables parallel compilation using all CPU cores.
+
+</Step>
+
+<Step title="Locate the output">
+
+Your built unikernel will be in:
+
+```
+build/myapp_qemu-x86_64
+build/myapp_qemu-x86_64.dbg  # Debug version with symbols
+```
+
+</Step>
+
+</Steps>
+
+### Build Configuration Options
+
+The Unikraft build system provides extensive configuration through Kconfig:
+
+#### Optimization Levels
+
+```
+Build Options  --->
+  Optimization level  --->
+    ( ) No optimizations (-O0)
+    (X) Optimize for performance (-O2)
+    ( ) Optimize for size (-Os)
+```
+
+#### Debug Symbols
+
+```
+Build Options  --->
+  Debug information level  --->
+    ( ) Level 0 (-g0), None
+    ( ) Level 1 (-g1)
+    ( ) Level 2 (-g2)
+    (X) Level 3 (-g3)
+```
+
+#### Cross-Compilation
+
+For cross-compilation, set the toolchain prefix:
+
+```bash
+make CROSS_COMPILE=aarch64-linux-gnu-
+```
+
+### Common Make Targets
+
+```bash
+# Full build
+make
+
+# Clean build artifacts
+make clean
+
+# Clean everything including configuration
+make properclean
+
+# Interactive configuration
+make menuconfig
+
+# Show configuration
+make show-config
+
+# Print build variables
+make print-vars
+```
+
+## Build Optimization Tips
+
+### Reducing Build Time
+
+1. **Use parallel builds**: Always use `-j` flag with make
+   ```bash
+   make -j$(nproc)
+   ```
+
+2. **Enable ccache**: Install and use ccache to cache compilations
+   ```bash
+   export CC="ccache gcc"
+   export CXX="ccache g++"
+   ```
+
+3. **Incremental builds**: Only rebuild changed components
+   ```bash
+   kraft build --no-cache=false
+   ```
+
+### Reducing Image Size
+
+1. **Enable dead code elimination**:
+   ```
+   Build Options  --->
+     [*] Drop unused functions and data
+   ```
+
+2. **Optimize for size**:
+   ```
+   Build Options  --->
+     Optimization level  --->
+       (X) Optimize for size (-Os)
+   ```
+
+3. **Disable unnecessary libraries**: Only select required components in menuconfig
+
+### Performance Optimization
+
+1. **Optimize for performance**:
+   ```
+   Build Options  --->
+     Optimization level  --->
+       (X) Optimize for performance (-O2)
+   ```
+
+2. **Enable LTO** (Link-Time Optimization):
+   ```
+   Build Options  --->
+     [*] LTO - Link time optimizations (EXPERIMENTAL)
+   ```
+
+3. **CPU-specific optimizations**: Select your specific CPU architecture in menuconfig
+
+## Container Build Environment
+
+For consistent builds across different systems, use the official Unikraft container:
+
+```bash
+docker run --platform linux/x86_64 -it --rm \
+  -v $(pwd):/workspace \
+  --entrypoint bash \
+  kraftkit.sh/base:latest
+```
+
+Inside the container:
+
+```bash
+cd /workspace
+kraft build
+```
+
+## Troubleshooting
+
+### Build Failures
+
+**Problem**: Missing dependencies
+
+```
+Solution: Install required development packages
+```
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install -y \
+  build-essential \
+  libncurses-dev \
+  flex bison
+```
+
+```bash Fedora/RHEL
+sudo dnf install -y \
+  gcc make \
+  ncurses-devel \
+  flex bison
+```
+
+```bash macOS
+brew install \
+  gnu-sed \
+  make \
+  ncurses
+```
+
+</CodeGroup>
+
+**Problem**: "kraft: command not found"
+
+```bash
+# Ensure kraft is in your PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# Or reinstall
+curl -sSfL https://get.kraftkit.sh | sh
+```
+
+**Problem**: Make version too old
+
+```bash
+# Check your make version
+make --version
+
+# On macOS, install GNU make
+brew install make
+gmake --version
+```
+
+### Build Performance Issues
+
+- **Slow builds**: Enable parallel compilation with `-j` flag
+- **Out of memory**: Reduce parallel jobs (e.g., `-j4` instead of `-j$(nproc)`)
+- **Disk space**: Run `kraft clean` to remove old build artifacts
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Kraftfile Syntax" href="/guides/kraftfile-syntax" icon="file-code">
+    Learn the complete Kraftfile syntax and configuration options
+  </Card>
+  <Card title="Configuration" href="/guides/configuration" icon="gear">
+    Explore Kconfig system for advanced customization
+  </Card>
+  <Card title="Running Unikernels" href="/guides/running-unikernels" icon="play">
+    Deploy and run your built unikernels
+  </Card>
+  <Card title="Debugging" href="/guides/debugging" icon="bug">
+    Debug your applications with GDB and other tools
+  </Card>
+</CardGroup>

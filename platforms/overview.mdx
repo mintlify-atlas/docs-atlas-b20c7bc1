@@ -1,0 +1,224 @@
+---
+title: "Platform Support Overview"
+description: "Understanding Unikraft's platform abstraction and supported hypervisors"
+---
+
+## What are Platforms?
+
+Platforms in Unikraft provide the abstraction layer between the unikernel and the underlying virtualization technology or hardware. They implement the low-level functionality needed to boot, run, and interact with different hypervisors and virtual machine monitors (VMMs).
+
+<Info>
+Unikraft currently supports two primary platform types: **KVM** and **Xen**, each optimized for specific virtualization environments.
+</Info>
+
+## Platform Architecture
+
+The platform layer handles critical system operations including:
+
+- **Boot protocols** - Initializing the unikernel from various boot methods
+- **Memory management** - Interfacing with hypervisor memory management
+- **I/O operations** - Device and console I/O handling
+- **Interrupt handling** - Processing interrupts and events from the hypervisor
+- **Shutdown/reboot** - Graceful termination and restart mechanisms
+
+### Platform Directory Structure
+
+Platforms are organized under `plat/` with the following structure:
+
+```
+plat/
+├── common/          # Shared platform code
+│   ├── arm/        # ARM-specific common code
+│   ├── x86/        # x86-specific common code
+│   ├── acpi.c      # ACPI table parsing
+│   ├── lcpu.c      # Logical CPU management
+│   ├── memory.c    # Memory region management
+│   └── paging.c    # Page table management
+├── kvm/            # KVM platform implementation
+└── xen/            # Xen platform implementation
+```
+
+## Supported Platforms
+
+### KVM (Kernel-based Virtual Machine)
+
+KVM is the recommended platform for most use cases, offering:
+
+- **Multiple boot protocols**: Multiboot, Lxboot, QEMU virt, EFI stub
+- **Broad VMM support**: QEMU, Firecracker, Cloud Hypervisor
+- **Architecture support**: x86_64 and ARM64
+- **Hardware features**: SMP, ACPI, PCI, virtio devices
+
+[Learn more about KVM →](/platforms/kvm)
+
+### Xen
+
+Xen provides paravirtualized and HVM environments:
+
+- **PV and PVH modes**: Flexible virtualization models
+- **Event channels**: Efficient inter-domain communication
+- **XenBus/XenStore**: Device discovery and management
+- **Architecture support**: x86_64, x86_32, ARM64, ARM32
+
+[Learn more about Xen →](/platforms/xen)
+
+## Platform Selection
+
+When building a Unikraft application, you select the target platform through the configuration system:
+
+<Tabs>
+  <Tab title="KVM Configuration">
+    ```bash
+    # Using kraft
+    kraft menu config
+    # Select: Platform Configuration -> KVM guest
+    ```
+    
+    Or in `Config.uk`:
+    ```
+    CONFIG_PLAT_KVM=y
+    CONFIG_KVM_VMM_QEMU=y
+    ```
+  </Tab>
+  
+  <Tab title="Xen Configuration">
+    ```bash
+    # Using kraft
+    kraft menu config
+    # Select: Platform Configuration -> Xen guest image
+    ```
+    
+    Or in `Config.uk`:
+    ```
+    CONFIG_PLAT_XEN=y
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+Selecting multiple platforms simultaneously is currently unsupported and may lead to build errors.
+</Warning>
+
+## Platform Configuration Options
+
+### Common Options
+
+All platforms share these configuration options defined in `plat/Config.uk`:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `UKPLAT_MEMRNAME` | Enable memory region names | Disabled |
+| `UKPLAT_MEMREGION_MAX_COUNT` | Maximum memory region descriptors | 128 |
+| `UKPLAT_LCPU_MAXCOUNT` | Maximum logical CPUs | 1 |
+| `PAGING` | Virtual memory API | Disabled |
+| `HZ` | Timer frequency | 100 Hz |
+
+### Platform-Specific Features
+
+Each platform provides unique configuration options:
+
+<CardGroup cols={2}>
+  <Card title="KVM Features" icon="server">
+    - Multiple boot protocol support
+    - EFI stub with TCG Reset Attack Mitigation
+    - VMM-specific optimizations (QEMU/Firecracker)
+    - PCI and MMIO device support
+  </Card>
+  
+  <Card title="Xen Features" icon="layer-group">
+    - PV and PVH mode selection
+    - Physical-to-machine table creation
+    - XenBus integration
+    - Event channel management
+  </Card>
+</CardGroup>
+
+## Boot Information (Bootinfo)
+
+Unikraft's platform layer uses a unified bootinfo structure (`plat/common/bootinfo.c`) to pass boot-time information from the platform to the core:
+
+```c
+struct ukplat_bootinfo {
+    struct ukplat_memregion_desc *mrds;  /* Memory region descriptors */
+    __u32 mrds_count;                     /* Number of regions */
+    struct cmdline cmdline;               /* Command line arguments */
+    void *dtb;                            /* Device tree blob (ARM) */
+    void *efi_st;                         /* EFI system table */
+};
+```
+
+This abstraction allows applications to remain platform-agnostic while still accessing necessary boot information.
+
+## Memory Management
+
+Platforms implement memory management through several layers:
+
+1. **Physical memory detection** - Discovering available RAM regions
+2. **Memory region descriptors** - Classifying memory types (usable, reserved, kernel, stack)
+3. **Memory allocators** - Providing heap allocation services
+4. **Paging support** (optional) - Virtual memory management with page tables
+
+Example memory initialization from `plat/kvm/memory.c`:
+
+```c
+int ukplat_mem_init(void)
+{
+    /* Platform-specific memory initialization */
+    return 0;
+}
+```
+
+## I/O and Device Support
+
+### Console I/O
+
+Each platform provides console I/O support through different mechanisms:
+
+- **KVM**: NS16550 UART (x86), PL011 UART (ARM), VGA console
+- **Xen**: XenConsole paravirtual console
+
+### Device Discovery
+
+<Tabs>
+  <Tab title="KVM Devices">
+    KVM platforms discover devices through:
+    - **PCI enumeration** (QEMU)
+    - **MMIO device tree** (ARM/Firecracker)
+    - **ACPI tables** (x86 with EFI)
+  </Tab>
+  
+  <Tab title="Xen Devices">
+    Xen uses paravirtualized device discovery:
+    - **XenBus** for device enumeration
+    - **XenStore** for device configuration
+    - **Grant tables** for memory sharing
+  </Tab>
+</Tabs>
+
+## Cloud Deployment
+
+While KVM and Xen provide the platform foundation, Unikraft unikernels are designed for seamless cloud deployment through [KraftCloud](https://kraft.cloud).
+
+<Card title="Deploy to KraftCloud" icon="cloud" href="/platforms/cloud-deployment">
+  Learn how to deploy your Unikraft applications to KraftCloud for production workloads with millisecond scale-to-zero and autoscaling capabilities.
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="KVM Platform" icon="computer" href="/platforms/kvm">
+    Explore KVM platform implementation, boot protocols, and configuration
+  </Card>
+  
+  <Card title="Xen Platform" icon="server" href="/platforms/xen">
+    Learn about Xen paravirtualization and hypercall interfaces
+  </Card>
+  
+  <Card title="Cloud Deployment" icon="cloud-upload" href="/platforms/cloud-deployment">
+    Deploy unikernels to KraftCloud production environment
+  </Card>
+  
+  <Card title="Build Your First App" icon="rocket" href="/guides">
+    Start building applications with Unikraft
+  </Card>
+</CardGroup>

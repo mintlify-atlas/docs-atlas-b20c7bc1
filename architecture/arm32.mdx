@@ -1,0 +1,479 @@
+---
+title: ARM32 Architecture
+description: Documentation for Unikraft's ARM32 (AArch32) architecture support
+---
+
+## Overview
+
+Unikraft provides support for the ARM32 (AArch32) architecture, specifically targeting ARMv7-A processors. The implementation focuses on Cortex-A series processors with optional NEON SIMD support.
+
+The ARM32 architecture implementation is located in `arch/arm/arm/` and provides:
+
+- ARMv7-A instruction set support
+- 32-bit execution state
+- Optional NEON floating-point and SIMD
+- Context switching and thread management
+- Memory barriers and synchronization primitives
+- Software integer division support
+
+## Architecture-Specific Headers
+
+The ARM32 implementation includes these key header files:
+
+### Core Headers
+
+- **`uk/asm/lcpu.h`**: CPU control and register structures (source:arch/arm/arm/include/uk/asm/lcpu.h:1)
+- **`uk/asm/compiler.h`**: Compiler-specific definitions
+- **`uk/asm/types.h`**: Architecture-specific type definitions
+- **`uk/asm/limits.h`**: Architecture limits
+- **`uk/asm/paging.h`**: Memory management structures
+- **`uk/asm/tls.h`**: Thread-local storage support
+
+## Register Structure
+
+### General Purpose Registers
+
+The `__regs` structure defines the register layout (source:arch/arm/arm/include/uk/asm/lcpu.h:34):
+
+```c
+struct __regs {
+    unsigned long r0;
+    unsigned long r1;
+    unsigned long r2;
+    unsigned long r3;
+    unsigned long r4;
+    unsigned long r5;
+    unsigned long r6;
+    unsigned long r7;
+    unsigned long r8;
+    unsigned long r9;
+    unsigned long r10;
+    unsigned long r11;
+    unsigned long r12;
+};
+```
+
+### ARM Procedure Call Standard (APCS)
+
+ARM32 follows the ARM Architecture Procedure Call Standard:
+
+<Tabs items={['Argument Registers', 'Special Registers']}>
+<Tab value="Argument Registers">
+
+- **r0-r3**: First four function arguments and return values
+- **r4-r11**: Callee-saved (variable registers)
+- **r12**: Intra-procedure-call scratch register (IP)
+
+</Tab>
+<Tab value="Special Registers">
+
+- **r13 (SP)**: Stack pointer
+- **r14 (LR)**: Link register (return address)
+- **r15 (PC)**: Program counter
+
+</Tab>
+</Tabs>
+
+## Processor Support
+
+Unikraft supports these ARM32 processor configurations (source:arch/arm/arm/Config.uk:1):
+
+<Tabs items={['Cortex-A7', 'AllWinner A20']}>
+<Tab value="Cortex-A7">
+
+```c
+config MARCH_ARM32_CORTEXA7
+    bool "Generic Cortex A7"
+    help
+        Compile for Cortex-A7 CPUs, no hardware FPU support
+```
+
+Generic Cortex-A7 configuration without FPU acceleration.
+
+</Tab>
+<Tab value="AllWinner A20">
+
+```c
+config MARCH_ARM32_A20NEON
+    bool "Cortex A7: AllWinner A20"
+    help
+        Compile for AllWinner A20 (Cortex-A7) CPUs
+        The NEON FPU is enabled. Please note that NEON is
+        not fully IEEE 754 compliant.
+```
+
+Optimized for AllWinner A20 with NEON SIMD enabled.
+
+</Tab>
+</Tabs>
+
+## Memory Barriers
+
+ARM32 provides memory synchronization primitives (source:arch/arm/arm/include/uk/asm/lcpu.h:50):
+
+```c
+#ifndef mb
+#define mb()  __asm__("dsb" : : : "memory")
+#endif
+
+#ifndef rmb
+#define rmb() __asm__("dsb" : : : "memory")
+#endif
+
+#ifndef wmb
+#define wmb() __asm__("dsb" : : : "memory")
+```
+
+The Data Synchronization Barrier (DSB) instruction ensures memory accesses complete before subsequent operations.
+
+### Barrier Types
+
+ARM32 DSB variants:
+- **DSB**: Full system data synchronization barrier
+- **DMB**: Data Memory Barrier (less restrictive)
+- **ISB**: Instruction Synchronization Barrier
+
+## Cache Line Size
+
+```c
+#define CACHE_LINE_SIZE  32
+```
+
+ARM32 processors typically use 32-byte cache lines (source:arch/arm/arm/include/uk/asm/lcpu.h:32).
+
+## Software Integer Division
+
+Since ARM32 lacks native 64-bit division hardware instructions, Unikraft provides software implementations:
+
+### Division Functions
+
+- **`divsi3.S`**: 32-bit signed integer division (source:arch/arm/arm/divsi3.S:1)
+- **`ldivmod.S`**: 64-bit division and modulo operations (source:arch/arm/arm/ldivmod.S:1)
+- **`ldivmod_helper.c`**: Helper functions for long division (source:arch/arm/arm/ldivmod_helper.c:1)
+- **`qdivrem.c`**: Quad-word division and remainder (source:arch/arm/arm/qdivrem.c:1)
+
+These implement:
+```c
+__s32 __divsi3(__s32 dividend, __s32 divisor);
+__s64 __aeabi_ldivmod(__s64 dividend, __s64 divisor);
+__u64 __aeabi_uldivmod(__u64 dividend, __u64 divisor);
+```
+
+## Spinwait Implementation
+
+```c
+static inline void ukarch_spinwait(void)
+{
+    /* Intelligent busy wait not supported on arm. */
+}
+```
+
+ARM32 does not have an equivalent to x86's `pause` instruction, so spinwait is a no-op (source:arch/arm/arm/include/uk/asm/lcpu.h:63).
+
+## Context Management
+
+### Context Switching
+
+ARM32 context switching preserves the following:
+- General-purpose registers (r0-r12)
+- Stack pointer (SP/r13)
+- Link register (LR/r14)
+- Program counter (PC/r15)
+- Processor status registers
+
+### Stack Alignment
+
+ARM32 requires 8-byte stack alignment per APCS:
+
+```c
+#define UKARCH_SP_ALIGN       8
+#define UKARCH_SP_ALIGN_MASK  7
+```
+
+## NEON SIMD Support
+
+When NEON is enabled (e.g., A20NEON configuration):
+
+### NEON Features
+
+- **32 x 64-bit NEON registers**: Can be viewed as 16 x 128-bit registers
+- **Vector operations**: Integer and floating-point SIMD
+- **FPU operations**: Single and double precision
+- **Non-IEEE 754 compliant**: Flush-to-zero, round-to-nearest only
+
+### Limitations
+
+NEON on ARM32 has several limitations:
+- Not fully IEEE 754 compliant
+- No denormal number support (flush to zero)
+- Limited exception handling
+- Suitable for graphics/DSP but not all general-purpose FP code
+
+## Memory Management
+
+### Page Tables
+
+ARM32 uses a 2-level page table structure:
+
+<Tabs items={['Page Sizes', 'Address Space']}>
+<Tab value="Page Sizes">
+
+- **Small pages**: 4KB
+- **Large pages**: 64KB
+- **Sections**: 1MB
+- **Supersections**: 16MB
+
+</Tab>
+<Tab value="Address Space">
+
+- **Virtual address space**: 32-bit (4GB)
+- **Physical address space**: Up to 40-bit with LPAE
+- **Split**: Typically 3GB user / 1GB kernel
+
+</Tab>
+</Tabs>
+
+### LPAE (Large Physical Address Extension)
+
+When enabled, LPAE provides:
+- 40-bit physical addressing (1TB)
+- 3-level page table walk
+- Support for larger memory systems
+
+## Compiler Support
+
+### ARM Instruction Sets
+
+<Tabs items={['ARM', 'Thumb', 'Thumb-2']}>
+<Tab value="ARM">
+
+32-bit fixed-width instruction set:
+- **Pros**: Better performance, full feature set
+- **Cons**: Larger code size
+- **Use**: Performance-critical code
+
+</Tab>
+<Tab value="Thumb">
+
+16-bit instruction subset:
+- **Pros**: Reduced code size (~70% of ARM)
+- **Cons**: Limited instructions, more branches
+- **Use**: Memory-constrained systems
+
+</Tab>
+<Tab value="Thumb-2">
+
+Mixed 16/32-bit instructions:
+- **Pros**: Code density + performance
+- **Cons**: Cortex-A only
+- **Use**: Modern ARM32 default
+
+</Tab>
+</Tabs>
+
+## Interrupt Handling
+
+### Exception Vectors
+
+ARM32 defines seven exception types:
+
+1. **Reset**: System initialization
+2. **Undefined instruction**: Invalid opcode
+3. **Software interrupt (SWI)**: System calls
+4. **Prefetch abort**: Instruction fetch failure
+5. **Data abort**: Memory access fault
+6. **IRQ**: Normal interrupt
+7. **FIQ**: Fast interrupt
+
+### Exception Modes
+
+ARM32 operates in different processor modes:
+- **User (USR)**: Normal application code
+- **FIQ**: Fast interrupt handling
+- **IRQ**: Normal interrupt handling
+- **Supervisor (SVC)**: System calls, privileged operations
+- **Abort (ABT)**: Memory access violations
+- **Undefined (UND)**: Undefined instructions
+- **System (SYS)**: Privileged user mode
+
+## TLS (Thread-Local Storage)
+
+ARM32 TLS implementation uses:
+- **cp15 c13**: TLS base register (on supported cores)
+- **Software emulation**: For cores without hardware TLS
+
+## Boot Process
+
+The ARM32 boot sequence:
+
+1. **Reset Vector**: CPU starts at reset vector
+2. **Supervisor Mode**: Boot in privileged mode
+3. **Exception Vectors**: Set up vector table
+4. **Cache/MMU**: Enable caches and MMU
+5. **C Runtime**: Initialize BSS, call constructors
+6. **Main Entry**: Jump to `ukplat_entry()`
+
+## Limitations and Considerations
+
+### Known Limitations
+
+<Tabs items={['NEON FP', 'Division', 'Memory']}>
+<Tab value="NEON FP">
+
+**Non-IEEE 754 Compliance**
+- Flush-to-zero mode only
+- No denormal support
+- Limited exception flags
+- Impact: Numeric precision issues in edge cases
+
+</Tab>
+<Tab value="Division">
+
+**Software Division**
+- No hardware 64-bit division
+- Performance impact on division-heavy code
+- Increased code size
+- Mitigation: Avoid division in hot paths
+
+</Tab>
+<Tab value="Memory">
+
+**32-bit Address Space**
+- Limited to 4GB virtual memory
+- Physical memory limited without LPAE
+- Less suitable for large-memory workloads
+
+</Tab>
+</Tabs>
+
+## Platform Support
+
+ARM32 is supported on:
+
+- **Raspberry Pi 2/3 (32-bit mode)**: Native hardware
+- **QEMU**: virt, versatilepb, vexpress machines
+- **Xen**: Paravirtualized ARM guests
+- **Embedded boards**: Various development boards
+
+## Compiler Flags
+
+Typical compilation flags for ARM32:
+
+```bash
+# Generic Cortex-A7 (no NEON)
+-march=armv7-a -mtune=cortex-a7
+
+# AllWinner A20 with NEON
+-march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard
+```
+
+## Context Structure
+
+### Minimal Context
+
+```c
+struct ukarch_ctx {
+    unsigned long sp;   /* Stack pointer (r13) */
+    unsigned long lr;   /* Link register (r14) */
+};
+```
+
+Context switching saves callee-saved registers (r4-r11) on the stack.
+
+## Shared ARM Code
+
+ARM32 shares common code with ARM64 in:
+
+- **`arch/arm/ctx.c`**: Generic context management (source:arch/arm/ctx.c:1)
+- **`arch/arm/ectx.c`**: Extended context (FPU/NEON) (source:arch/arm/ectx.c:1)
+- **`arch/arm/sysctx.c`**: System call context (source:arch/arm/sysctx.c:1)
+
+These files provide architecture-agnostic implementations that work for both ARM32 and ARM64.
+
+## Performance Considerations
+
+### Optimization Tips
+
+1. **Avoid 64-bit division**: Use software division sparingly
+2. **Use NEON carefully**: Profile before and after
+3. **Align data structures**: Respect cache line boundaries
+4. **Minimize branching**: ARM benefits from straight-line code
+5. **Use conditional execution**: ARM's predicated instructions
+
+### NEON Usage
+
+When using NEON:
+```c
+#ifdef __ARM_NEON__
+    // NEON-optimized code path
+    neon_process_data(buffer, size);
+#else
+    // Generic fallback
+    generic_process_data(buffer, size);
+#endif
+```
+
+## Development Status
+
+<Note>
+The ARM32 port is functional but receives less active development than ARM64. Modern ARM devices use ARMv8-A (ARM64), making ARM32 primarily relevant for legacy hardware and embedded systems.
+</Note>
+
+## Migration to ARM64
+
+For projects considering migration from ARM32 to ARM64:
+
+<Tabs items={['Benefits', 'Considerations']}>
+<Tab value="Benefits">
+
+- **64-bit addressing**: Support for >4GB memory
+- **More registers**: x0-x30 vs r0-r12
+- **Better SIMD**: Advanced SIMD (NEON) is mandatory
+- **Hardware division**: Native 64-bit division
+- **Modern features**: PAC, BTI, MTE security features
+- **Better performance**: Generally 20-40% faster
+
+</Tab>
+<Tab value="Considerations">
+
+- **Code size**: 64-bit pointers increase memory footprint
+- **Binary compatibility**: Different instruction encoding
+- **Toolchain**: Requires ARM64 cross-compilation tools
+- **Hardware**: Requires ARMv8-A or later processor
+- **Testing**: Need ARM64 hardware or emulator
+
+</Tab>
+</Tabs>
+
+## Debugging
+
+### GDB Register Names
+
+```
+r0-r12    General purpose registers
+sp (r13)  Stack pointer
+lr (r14)  Link register
+pc (r15)  Program counter
+cpsr      Current program status register
+```
+
+### Common Issues
+
+1. **Alignment faults**: Ensure proper data alignment
+2. **NEON issues**: Check IEEE 754 compliance requirements
+3. **Division by zero**: Software division doesn't trap
+4. **Stack overflow**: 8-byte aligned stack required
+
+## References
+
+- **ARM Architecture Reference Manual (ARMv7-A/R)**
+- **Procedure Call Standard for the ARM Architecture (APCS)**
+- **ARM NEON Programmer's Guide**
+- **ARM Cortex-A Series Programmer's Guide**
+- Source: `arch/arm/arm/` directory in Unikraft repository
+
+## Additional Resources
+
+- [ARM Architecture Documentation](https://developer.arm.com/architectures)
+- [ARM Cortex-A7 Technical Reference Manual](https://developer.arm.com/documentation/ddi0464/)
+- Source files in `arch/arm/arm/` and `arch/arm/` (shared code)

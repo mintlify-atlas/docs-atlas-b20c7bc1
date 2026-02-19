@@ -1,0 +1,433 @@
+---
+title: Porting Applications to Unikraft
+description: Comprehensive guide to porting applications and integrating external libraries with Unikraft
+---
+
+Porting applications to Unikraft involves adapting existing software to work within the unikernel environment. This guide covers the strategies, patterns, and best practices for successful application ports.
+
+## Understanding Application Requirements
+
+Before starting a port, analyze your application's dependencies:
+
+### System Call Requirements
+
+Unikraft provides POSIX compatibility through `libsyscall_shim` and various POSIX libraries. Check which system calls your application uses:
+
+```bash
+strace -c ./your_application
+```
+
+Common POSIX subsystems available:
+- **File I/O**: `libvfscore`, `libposix-fdio`, `libposix-fdtab`
+- **Networking**: `libposix-socket`, `libuknetdev`
+- **Process/Thread**: `libposix-process`, `libuksched`
+- **Memory**: `libukalloc`, `libposix-mmap`
+- **Time**: `libposix-time`, `libuktimeconv`
+
+### libc Requirements
+
+Unikraft offers two libc options:
+
+1. **nolibc**: Minimal libc implementation
+   - Lightweight, ~50KB
+   - Sufficient for simple applications
+   - Located in `lib/nolibc/`
+
+2. **musl**: Full-featured libc
+   - Complete POSIX compatibility
+   - External library at `unikraft/lib-musl`
+
+## Creating an External Library
+
+When porting an application with dependencies, create a Unikraft library wrapper.
+
+### Directory Structure
+
+```
+lib-myapp/
+├── Makefile.uk          # Build configuration
+├── Config.uk            # Kconfig options
+├── Makefile             # Optional: external wrapper
+├── include/             # Public headers
+│   └── myapp/
+│       └── myapp.h
+├── origin/              # Original source (optional)
+└── patches/             # Source patches
+```
+
+### Basic Makefile.uk
+
+The `Makefile.uk` defines how your library integrates with Unikraft's build system:
+
+```makefile
+# Register the library
+$(eval $(call addlib_s,libmyapp,$(CONFIG_LIBMYAPP)))
+
+# Add include paths globally
+CINCLUDES-$(CONFIG_LIBMYAPP) += -I$(LIBMYAPP_BASE)/include
+CXXINCLUDES-$(CONFIG_LIBMYAPP) += -I$(LIBMYAPP_BASE)/include
+
+# Add include paths for this library only
+LIBMYAPP_CINCLUDES-y += -I$(LIBMYAPP_BASE)/origin/include
+LIBMYAPP_CINCLUDES-y += -I$(LIBMYAPP_BASE)
+
+# Set compiler flags
+LIBMYAPP_CFLAGS-y += -Wno-deprecated-declarations
+LIBMYAPP_CXXFLAGS-y += -std=c++11
+
+# Add source files
+LIBMYAPP_SRCS-y += $(LIBMYAPP_BASE)/origin/src/core.c
+LIBMYAPP_SRCS-y += $(LIBMYAPP_BASE)/origin/src/utils.c
+LIBMYAPP_SRCS-$(CONFIG_LIBMYAPP_FEATURE) += $(LIBMYAPP_BASE)/origin/src/feature.c
+
+# Conditional compilation based on dependencies
+ifeq ($(CONFIG_LIBVFSCORE),y)
+LIBMYAPP_SRCS-y += $(LIBMYAPP_BASE)/origin/src/file_io.c
+endif
+
+# Add glue code
+LIBMYAPP_SRCS-y += $(LIBMYAPP_BASE)/glue.c
+```
+
+### Basic Config.uk
+
+The `Config.uk` file defines configuration options using Kconfig syntax:
+
+```kconfig
+menuconfig LIBMYAPP
+	bool "myapp: Description of the library"
+	default n
+	select LIBUKALLOC
+	select LIBNOLIBC if !HAVE_LIBC
+	help
+		A library that provides X functionality.
+		More detailed description here.
+
+if LIBMYAPP
+	config LIBMYAPP_FEATURE
+		bool "Enable advanced features"
+		default n
+		depends on LIBVFSCORE
+		help
+			Enable advanced features that require VFS support.
+
+	config LIBMYAPP_DEBUG
+		bool "Enable debug output"
+		default n
+		help
+			Enable verbose debug messages.
+
+	config LIBMYAPP_BUFFER_SIZE
+		int "Buffer size (bytes)"
+		default 4096
+		range 1024 65536
+		help
+			Size of internal buffers.
+endif
+```
+
+## Common Porting Patterns
+
+### Syscall Registration
+
+If your library provides system calls, register them with `libsyscall_shim`:
+
+```makefile
+# In Makefile.uk
+UK_PROVIDED_SYSCALLS-$(CONFIG_LIBMYAPP) += read-3
+UK_PROVIDED_SYSCALLS-$(CONFIG_LIBMYAPP) += write-3
+UK_PROVIDED_SYSCALLS-$(CONFIG_LIBMYAPP) += ioctl-3
+```
+
+The format is `syscall_name-arg_count`.
+
+### Handling Missing Functions
+
+Create a glue layer (`glue.c`) for missing functionality:
+
+```c
+#include <uk/config.h>
+#include <uk/essentials.h>
+#include <errno.h>
+
+/* Stub for unsupported functionality */
+int unsupported_function(void)
+{
+	return -ENOSYS;
+}
+
+/* Wrapper to adapt interfaces */
+int myapp_init(void)
+{
+	/* Initialize using Unikraft APIs */
+	struct uk_alloc *a = uk_alloc_get_default();
+	// ... initialization code
+	return 0;
+}
+
+/* Constructor to run at boot */
+static int myapp_early_init(void)
+{
+	uk_pr_info("MyApp initializing\n");
+	return 0;
+}
+
+uk_early_initcall(myapp_early_init);
+```
+
+### Architecture-Specific Code
+
+Handle multiple architectures using conditional compilation:
+
+```makefile
+# In Makefile.uk
+LIBMYAPP_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYAPP_BASE)/arch/x86_64/arch_code.c
+LIBMYAPP_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYAPP_BASE)/arch/arm64/arch_code.c
+
+# Add architecture-specific includes
+LIBMYAPP_CINCLUDES-$(CONFIG_ARCH_X86_64) += -I$(LIBMYAPP_BASE)/arch/x86_64
+LIBMYAPP_CINCLUDES-$(CONFIG_ARCH_ARM_64) += -I$(LIBMYAPP_BASE)/arch/arm64
+```
+
+### Per-File Compiler Flags
+
+Apply specific flags to individual files:
+
+```makefile
+# Optimize specific file for performance
+LIBMYAPP_CORE_FLAGS-$(CONFIG_OPTIMIZE_PERF) += -O3 -funroll-loops
+
+# Disable warnings for third-party code
+LIBMYAPP_LEGACY_FLAGS += -Wno-unused-parameter -Wno-sign-compare
+```
+
+### Library Dependencies
+
+Declare dependencies properly in `Config.uk`:
+
+```kconfig
+menuconfig LIBMYAPP
+	bool "myapp"
+	select LIBUKALLOC      # Required dependency
+	select LIBUKDEBUG      # Required dependency
+	depends on LIBVFSCORE  # Optional but needed for some features
+	imply LIBPOSIX_SOCKET  # Suggested dependency
+```
+
+- **select**: Automatically enables required dependencies
+- **depends on**: Makes this library available only when dependency is enabled
+- **imply**: Suggests dependency but doesn't force it
+
+## Patching External Sources
+
+### Using Patch Files
+
+Store modifications in the `patches/` directory:
+
+```bash
+# Create a patch
+cd lib-myapp/origin
+git diff > ../patches/0001-unikraft-adaptation.patch
+```
+
+Apply patches in `Makefile.uk`:
+
+```makefile
+# Fetch and extract phase
+$(LIBMYAPP_BUILD)/.patched: $(LIBMYAPP_BUILD)/.extracted
+	@cd $(LIBMYAPP_BUILD) && \
+		patch -p1 < $(LIBMYAPP_BASE)/patches/0001-unikraft-adaptation.patch
+	@touch $@
+
+UK_PREPARE += $(LIBMYAPP_BUILD)/.patched
+```
+
+### Build-Time Code Generation
+
+Use AWK scripts for code generation (like `syscall_shim`):
+
+```makefile
+# Generate header from template
+LIBMYAPP_SRCS-y += $(LIBMYAPP_BASE)/generator.awk>.h
+LIBMYAPP_GENERATOR_SUBBUILD = include
+LIBMYAPP_GENERATOR_AWKINCLUDES-y += $(LIBMYAPP_BASE)/syscalls.txt
+```
+
+## Main Application Integration
+
+### Providing main()
+
+Your application library should provide `main()`:
+
+```c
+#include <stdio.h>
+#include <uk/boot.h>
+
+int main(int argc, char *argv[])
+{
+	printf("Hello from MyApp!\n");
+	
+	/* Your application logic */
+	
+	return 0;
+}
+```
+
+### Using Constructors/Destructors
+
+Initialize components at specific boot stages:
+
+```c
+#include <uk/init.h>
+
+/* Very early initialization (no allocator yet) */
+static int myapp_preinit(void)
+{
+	uk_pr_info("Pre-init\n");
+	return 0;
+}
+uk_early_initcall(myapp_preinit);
+
+/* Early initialization (allocator available) */
+static int myapp_init(void)
+{
+	uk_pr_info("Init\n");
+	return 0;
+}
+uk_sys_initcall(myapp_init);
+
+/* Late initialization */
+static int myapp_lateinit(void)
+{
+	uk_pr_info("Late init\n");
+	return 0;
+}
+uk_late_initcall(myapp_lateinit);
+```
+
+Priority levels (from `include/uk/init.h`):
+- `uk_early_initcall`: Before memory allocator
+- `uk_plat_initcall`: Platform initialization
+- `uk_sys_initcall`: System libraries
+- `uk_late_initcall`: After all systems ready
+- `uk_lib_initcall`: Library-specific
+
+## Fetching External Sources
+
+### Using Makefile for Downloads
+
+```makefile
+# In Makefile (not Makefile.uk)
+MYAPP_VERSION = 1.2.3
+MYAPP_URL = https://github.com/example/myapp/archive/v$(MYAPP_VERSION).tar.gz
+MYAPP_SUBDIR = myapp-$(MYAPP_VERSION)
+
+$(MYAPP_SUBDIR).tar.gz:
+	wget $(MYAPP_URL) -O $@
+
+$(MYAPP_SUBDIR): $(MYAPP_SUBDIR).tar.gz
+	tar xzf $<
+	mv $(MYAPP_SUBDIR) origin
+
+.PHONY: prepare
+prepare: $(MYAPP_SUBDIR)
+
+.PHONY: clean
+clean:
+	rm -rf origin $(MYAPP_SUBDIR).tar.gz
+```
+
+### Git Submodules
+
+```bash
+cd lib-myapp
+git submodule add https://github.com/example/myapp.git origin
+git submodule update --init --recursive
+```
+
+## Testing Your Port
+
+### Minimal Configuration
+
+Create a test configuration:
+
+```yaml
+# kraft.yaml
+specification: v0.6
+name: myapp-test
+unikraft:
+  version: stable
+libraries:
+  myapp:
+    version: stable
+targets:
+  - plat: kvm
+    arch: x86_64
+```
+
+### Build and Run
+
+```bash
+kraft build
+kraft run
+```
+
+### Debugging
+
+Enable debug output in `Config.uk`:
+
+```kconfig
+config LIBMYAPP_DEBUG
+	bool "Debug output"
+	select LIBUKDEBUG
+	default y
+```
+
+## Best Practices
+
+1. **Minimize modifications**: Use glue code instead of patching when possible
+2. **Upstream compatibility**: Keep patches minimal for easier upstream updates
+3. **Document dependencies**: Clearly specify required libraries
+4. **Test incrementally**: Build and test each component separately
+5. **Use Unikraft APIs**: Prefer `uk_*` APIs over direct system calls
+6. **Handle errors**: Check return values and provide meaningful errors
+7. **Memory management**: Use `uk_alloc` family functions
+8. **Logging**: Use `uk_pr_*` macros for consistent logging
+
+## Real-World Examples
+
+Study these well-ported libraries in the Unikraft ecosystem:
+
+- **lib-musl**: Complete libc port
+- **lib-lwip**: Lightweight TCP/IP stack
+- **lib-sqlite**: Database engine
+- **lib-redis**: Key-value store
+- **lib-nginx**: Web server
+
+## Troubleshooting
+
+### Common Issues
+
+**Undefined references during linking**:
+- Check library dependencies in `Config.uk`
+- Verify source files are added to `LIBMYAPP_SRCS-y`
+- Check for missing system calls
+
+**Missing headers**:
+- Add include paths to `CINCLUDES` or `LIBMYAPP_CINCLUDES`
+- Check architecture-specific paths
+
+**Runtime crashes**:
+- Enable debug symbols: `CONFIG_DEBUG_SYMBOLS_LVL3=y`
+- Use `uk_pr_debug()` for tracing
+- Check initialization order
+
+**Build errors in third-party code**:
+- Add compiler flags: `-Wno-error` or specific warnings
+- Consider patching problematic code
+
+## Next Steps
+
+- [Creating Internal Libraries](/advanced/creating-libraries)
+- [Platform Development](/advanced/platform-development)
+- [Performance Optimization](/advanced/performance-optimization)

@@ -1,0 +1,436 @@
+---
+title: 9P File System
+description: Network-based pass-through filesystem enabling seamless file sharing between Unikraft guests and host systems
+---
+
+The `9pfs` library implements a client for the 9P network protocol, enabling Unikraft applications to access host filesystems or remote file servers through a virtual filesystem device.
+
+## Overview
+
+9P (Plan 9 Filesystem Protocol) provides a lightweight method for accessing files between a guest operating system and a host. In Unikraft, 9pfs creates virtual filesystem devices (`uk_9pdev`) that allow direct, pass-through access to host directories.
+
+### Key Features
+
+- **Host filesystem access**: Share directories between host and Unikraft guest
+- **Protocol support**: 9P2000.u (Unix) and 9P2000.L (Linux) variants
+- **VirtIO transport**: Efficient virtualized I/O through VirtIO-9P
+- **Zero-copy operations**: Minimal overhead for file operations
+- **POSIX compatibility**: Standard file operations work seamlessly
+
+## Architecture
+
+### Data Structures
+
+#### Mount Data
+
+The mount structure contains connection and protocol information:
+
+```c
+struct uk_9pfs_mount_data {
+    struct uk_9pdev       *dev;    // 9P device for virtio interaction
+    struct uk_9pdev_trans *trans;  // Transport (virtio, unix, tcp)
+    enum uk_9pfs_proto    proto;   // Protocol version
+    char                  *uname;  // Username for mount
+    char                  *aname;  // Filesystem name to access
+};
+```
+
+#### Protocol Versions
+
+```c
+enum uk_9pfs_proto {
+    UK_9P_PROTO_2000U,  // Unix extensions
+    UK_9P_PROTO_2000L,  // Linux extensions (default)
+    UK_9P_PROTO_MAX
+};
+```
+
+- **9P2000.u**: Basic protocol with Unix-specific extensions
+- **9P2000.L**: Enhanced protocol with Linux-specific features (symbolic links, permissions)
+
+#### File Data
+
+File-specific state for directory operations:
+
+```c
+struct uk_9pfs_file_data {
+    struct uk_9pfid *fid;         // Unique file identifier
+    char            *readdir_buf; // Buffer for directory entries
+    int             readdir_off;  // Current offset in buffer
+    int             readdir_sz;   // Total buffer size
+};
+```
+
+#### Node Data
+
+Per-node state tracking:
+
+```c
+struct uk_9pfs_node_data {
+    struct uk_9pfid *fid;          // File identifier for vnode
+    int             nb_open_files; // Number of open file handles
+    bool            removed;       // Pending removal flag
+};
+```
+
+## Configuration
+
+### Enable 9pfs
+
+```console
+$ kraft menuconfig
+```
+
+Navigate to: **Library Configuration → 9pfs: 9p filesystem**
+
+The library requires:
+- `LIBVFSCORE`: VFS core interface
+- `LIBUK9P`: 9P protocol implementation
+
+### Platform Requirements
+
+For QEMU/KVM platforms, enable VirtIO support:
+
+1. **Platform Configuration → KVM guest**
+2. **KVM guest options → Virtio → Virtio PCI device support**
+
+## Usage
+
+### Basic Example
+
+```c
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int main(int argc, char *argv[])
+{
+    char buf[1024];
+    int fd;
+
+    // Open file from host filesystem
+    fd = open("/westworld.txt", O_RDWR | O_CREAT, 0777);
+    if (fd < 0) {
+        perror("open failed");
+        return 1;
+    }
+
+    // Write to file
+    write(fd, "These violent delights have violent ends.", 41);
+    close(fd);
+
+    // Read back from file
+    fd = open("/westworld.txt", O_RDONLY);
+    read(fd, buf, 41);
+    buf[41] = '\0';
+    printf("%s\n", buf);
+    close(fd);
+
+    return 0;
+}
+```
+
+### Mounting at Boot
+
+#### Using vfscore Auto-mount
+
+Configure automatic mounting:
+
+1. **Library Configuration → vfscore: VFS Core Interface**
+2. **vfscore: Configuration → Automatically mount a root filesystem (/)**
+3. **Default root filesystem → 9pfs**
+4. **Default root device**: Set to `rootfs` (must match QEMU mount_tag)
+
+#### Using posix-vfs mount()
+
+```c
+#include <sys/mount.h>
+
+int main(void)
+{
+    int rc;
+
+    // Mount with Linux protocol (default)
+    rc = mount("shared", "/mnt/host", "9pfs", 0, 
+               "version=9P2000.L,uname=root,aname=/");
+    if (rc < 0) {
+        perror("mount failed");
+        return 1;
+    }
+
+    // Now access files in /mnt/host
+    int fd = open("/mnt/host/file.txt", O_RDONLY);
+    // ...
+
+    return 0;
+}
+```
+
+### Mount Options
+
+Supported options (comma-separated):
+
+| Option | Values | Description | Default |
+|--------|--------|-------------|---------|
+| `version` | `9P2000.u` or `9P2000.L` | Protocol version (case sensitive) | `9P2000.L` |
+| `uname` | string | Username for mount | `""` |
+| `aname` | string | File tree to access | `""` |
+
+**Example:**
+```c
+mount("tag", "/mnt", "9pfs", 0, "version=9P2000.u,uname=unikraft,aname=/data");
+```
+
+## Running with QEMU
+
+### Basic Setup
+
+Create a directory to share:
+
+```console
+$ mkdir rootfs
+```
+
+Launch QEMU with 9P device:
+
+```console
+$ qemu-system-x86_64 \
+    -fsdev local,id=myid,path=./rootfs/,security_model=none \
+    -device virtio-9p-pci,fsdev=myid,mount_tag=rootfs \
+    -kernel build/app-myapp_kvm-x86_64 \
+    -nographic
+```
+
+### QEMU Parameters Explained
+
+- **`-fsdev local,id=myid,path=./rootfs/,security_model=none`**
+  - `local`: Use local filesystem backend
+  - `id=myid`: Identifier for this fsdev
+  - `path=./rootfs/`: Host directory to share
+  - `security_model=none`: No security mapping (simplest, development only)
+
+- **`-device virtio-9p-pci,fsdev=myid,mount_tag=rootfs`**
+  - `virtio-9p-pci`: VirtIO 9P PCI device
+  - `fsdev=myid`: Links to the fsdev defined above
+  - `mount_tag=rootfs`: Tag used by guest to identify this share (must match configuration)
+
+### Security Models
+
+For production use, consider security models:
+
+```console
+# Passthrough (requires root)
+-fsdev local,id=myid,path=./rootfs/,security_model=passthrough
+
+# Mapped (safer)
+-fsdev local,id=myid,path=./rootfs/,security_model=mapped-xattr
+
+# None (development only)
+-fsdev local,id=myid,path=./rootfs/,security_model=none
+```
+
+## Advanced Configuration
+
+### Multiple Mount Points
+
+Share different directories at different mount points:
+
+```console
+$ qemu-system-x86_64 \
+    -fsdev local,id=fs1,path=./data/,security_model=none \
+    -device virtio-9p-pci,fsdev=fs1,mount_tag=data \
+    -fsdev local,id=fs2,path=./config/,security_model=none \
+    -device virtio-9p-pci,fsdev=fs2,mount_tag=config \
+    -kernel build/app-myapp_kvm-x86_64
+```
+
+Mount in application:
+
+```c
+mount("data", "/mnt/data", "9pfs", 0, NULL);
+mount("config", "/etc", "9pfs", 0, NULL);
+```
+
+### Read-Only Mounts
+
+Use mount flags for read-only access:
+
+```c
+#include <sys/mount.h>
+
+mount("shared", "/mnt/readonly", "9pfs", MS_RDONLY, NULL);
+```
+
+### Using posix-vfs-fstab
+
+Configure automatic mounting via kernel parameters:
+
+```console
+$ qemu-system-x86_64 \
+    -fsdev local,id=myid,path=./rootfs/,security_model=none \
+    -device virtio-9p-pci,fsdev=myid,mount_tag=shared \
+    -kernel build/app-myapp_kvm-x86_64 \
+    -append "vfs.fstab=shared:/mnt:9pfs::version=9P2000.L"
+```
+
+## Use Cases
+
+### Development Workflow
+
+Share source code and build outputs:
+
+```console
+# Share application directory
+$ qemu-system-x86_64 \
+    -fsdev local,id=appdir,path=./app/,security_model=none \
+    -device virtio-9p-pci,fsdev=appdir,mount_tag=app \
+    ...
+
+# Access from guest
+/mnt/app/config.json
+/mnt/app/data/
+```
+
+### Configuration Management
+
+Share configuration files without embedding them in the image:
+
+```c
+// Mount configuration directory
+mount("config", "/etc/app", "9pfs", MS_RDONLY, NULL);
+
+// Read configuration
+FILE *f = fopen("/etc/app/settings.json", "r");
+```
+
+### Log Collection
+
+Write logs to host filesystem for easy access:
+
+```c
+// Mount log directory
+mount("logs", "/var/log", "9pfs", 0, NULL);
+
+// Write logs (visible on host)
+FILE *log = fopen("/var/log/app.log", "a");
+fprintf(log, "Application started\n");
+fclose(log);
+```
+
+### Data Processing
+
+Process large datasets from host without copying:
+
+```c
+mount("dataset", "/data", "9pfs", MS_RDONLY, NULL);
+
+// Process files directly from host
+DIR *dir = opendir("/data");
+struct dirent *ent;
+while ((ent = readdir(dir)) != NULL) {
+    process_file(ent->d_name);
+}
+closedir(dir);
+```
+
+### Testing and CI/CD
+
+Share test files and collect results:
+
+```bash
+# Host: Prepare test data
+mkdir -p testdata/input testdata/output
+
+# Run test in guest
+qemu-system-x86_64 \
+    -fsdev local,id=test,path=./testdata/,security_model=none \
+    -device virtio-9p-pci,fsdev=test,mount_tag=test \
+    -kernel build/test_kvm-x86_64 \
+    -nographic
+
+# Host: Collect results
+cat testdata/output/results.txt
+```
+
+## Performance Considerations
+
+### Optimization Tips
+
+1. **Use 9P2000.L**: The Linux variant offers better performance and features
+2. **Batch operations**: Minimize round-trips by batching file operations
+3. **Cache strategies**: Use appropriate caching for your workload
+4. **Buffer sizes**: Larger read/write buffers reduce overhead
+
+### When to Use 9pfs
+
+**Good for:**
+- Development and debugging (easy file sharing)
+- Configuration file access
+- Log file writing
+- Small to medium file I/O
+- Shared data between host and guest
+
+**Not ideal for:**
+- High-performance I/O workloads
+- Database files (use block devices)
+- Very large files with random access
+- Latency-sensitive operations
+
+### Alternatives
+
+- **ramfs**: For temporary, high-speed storage (in-memory)
+- **Block devices**: For high-performance persistent storage
+- **initrd**: For read-only embedded filesystems
+
+## Troubleshooting
+
+### Mount Tag Mismatch
+
+**Error:** "No such device" when mounting
+
+**Solution:** Ensure mount_tag in QEMU matches the device name in mount():
+```console
+# QEMU
+-device virtio-9p-pci,fsdev=myid,mount_tag=rootfs
+
+# Application
+mount("rootfs", "/", "9pfs", 0, NULL);  // Must match "rootfs"
+```
+
+### Permission Denied
+
+**Issue:** Cannot access files on host filesystem
+
+**Solutions:**
+1. Check host directory permissions
+2. Use appropriate security_model
+3. Try `security_model=none` for testing
+
+### Protocol Version Errors
+
+**Error:** "Protocol version not supported"
+
+**Solution:** Explicitly specify version:
+```c
+mount("dev", "/mnt", "9pfs", 0, "version=9P2000.L");
+```
+
+### VirtIO Device Not Found
+
+**Issue:** 9P device not available
+
+**Solutions:**
+1. Enable VirtIO PCI support in platform configuration
+2. Verify QEMU command includes both `-fsdev` and `-device` options
+3. Check `LIBUK9P` is enabled in configuration
+
+## Related Libraries
+
+- [posix-vfs](/libraries/vfs) - Virtual file system layer
+- [ramfs](/libraries/ramfs) - RAM-based filesystem
+- [devfs](/libraries/devfs) - Device filesystem
+
+## References
+
+- [9P Protocol Specification](https://en.wikipedia.org/wiki/9P_(protocol))
+- Source: `lib/9pfs/` in Unikraft repository

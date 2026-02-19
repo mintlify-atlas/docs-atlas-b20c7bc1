@@ -1,0 +1,788 @@
+---
+title: Running Unikernels
+description: Deploy and run Unikraft unikernels on QEMU, KVM, Xen, and cloud platforms
+---
+
+## Overview
+
+Once you've built your Unikraft unikernel, you can run it on various platforms:
+
+- **QEMU**: Full system emulation, great for development and testing
+- **KVM**: Hardware-accelerated virtualization for production
+- **Xen**: Type-1 hypervisor for cloud and enterprise
+- **KraftCloud**: Managed unikernel cloud platform
+- **Firecracker/Cloud Hypervisor**: Lightweight VMMs
+
+This guide covers all deployment methods.
+
+## Running with kraft CLI
+
+The `kraft` command provides the simplest way to run unikernels.
+
+### Basic Execution
+
+<Steps>
+
+<Step title="Run a built unikernel">
+
+```bash
+# Run unikernel in current directory
+kraft run .
+
+# Or run by name
+kraft run myapp
+```
+
+</Step>
+
+<Step title="Run a pre-built image">
+
+```bash
+# Run from Unikraft catalog
+kraft run unikraft.org/helloworld:latest
+```
+
+</Step>
+
+<Step title="Stop a running instance">
+
+```bash
+# Stop by name
+kraft stop myapp
+
+# Stop all instances
+kraft stop --all
+```
+
+</Step>
+
+</Steps>
+
+### Managing Instances
+
+```bash
+# List running instances
+kraft ps
+
+# List all instances (including stopped)
+kraft ps --all
+
+# Remove stopped instances
+kraft rm myapp
+
+# Remove all stopped instances
+kraft rm --all
+```
+
+### Runtime Options
+
+<CodeGroup>
+
+```bash Network
+# Expose ports
+kraft run --port 8080:8080 .
+
+# Multiple ports
+kraft run -p 8080:8080 -p 8443:8443 .
+
+# Custom network
+kraft run --network bridge .
+```
+
+```bash Memory
+# Set memory limit (in MB)
+kraft run --memory 512 .
+
+# Set memory limit (with unit)
+kraft run -m 1G .
+```
+
+```bash CPUs
+# Allocate CPU cores
+kraft run --cpus 2 .
+
+# Pin to specific CPUs
+kraft run --cpuset 0,1 .
+```
+
+```bash Environment
+# Set environment variables
+kraft run --env PORT=8080 --env DEBUG=true .
+
+# Load from file
+kraft run --env-file .env .
+```
+
+</CodeGroup>
+
+### Volume Mounts
+
+```bash
+# Mount host directory
+kraft run --volume ./data:/mnt/data .
+
+# Mount read-only
+kraft run -v ./config:/etc/app:ro .
+
+# Multiple volumes
+kraft run \
+  -v ./data:/mnt/data \
+  -v ./logs:/var/log \
+  .
+```
+
+### Interactive Mode
+
+```bash
+# Run with interactive console
+kraft run -i .
+
+# Run in background (detached)
+kraft run -d .
+
+# Run with specific name
+kraft run --name myapp-01 .
+```
+
+### Complete Example
+
+```bash
+kraft run \
+  --name web-server \
+  --port 8080:8080 \
+  --memory 512M \
+  --cpus 2 \
+  --volume ./static:/var/www:ro \
+  --env PORT=8080 \
+  --detach \
+  .
+```
+
+## Running on QEMU
+
+QEMU provides full system emulation and is excellent for development.
+
+### Installation
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install -y qemu-system-x86 qemu-system-arm
+```
+
+```bash Fedora/RHEL
+sudo dnf install -y qemu-system-x86 qemu-system-aarch64
+```
+
+```bash macOS
+brew install qemu
+```
+
+</CodeGroup>
+
+### Basic QEMU Execution
+
+<Steps>
+
+<Step title="Run x86_64 unikernel">
+
+```bash
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic
+```
+
+</Step>
+
+<Step title="Exit QEMU">
+
+Press `Ctrl-A`, then `X` to exit.
+
+</Step>
+
+</Steps>
+
+### QEMU with Networking
+
+<CodeGroup>
+
+```bash User Networking
+# Simple user-mode networking
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -netdev user,id=net0,hostfwd=tcp::8080-:8080 \
+  -device virtio-net-pci,netdev=net0
+```
+
+```bash Bridge Networking
+# Advanced bridge networking
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -netdev bridge,id=net0,br=virbr0 \
+  -device virtio-net-pci,netdev=net0
+```
+
+```bash TAP Networking
+# TAP interface for direct access
+sudo qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -netdev tap,id=net0,ifname=tap0,script=no \
+  -device virtio-net-pci,netdev=net0
+```
+
+</CodeGroup>
+
+### QEMU with Storage
+
+```bash
+# Mount 9pfs filesystem
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -fsdev local,id=fs0,path=./rootfs,security_model=none \
+  -device virtio-9p-pci,fsdev=fs0,mount_tag=rootfs
+
+# Use disk image
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -drive file=disk.img,if=virtio,format=raw
+```
+
+### QEMU Performance Options
+
+```bash
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -cpu host \
+  -smp 4 \
+  -m 1G \
+  -nographic \
+  -no-acpi \
+  -no-reboot
+```
+
+**Options explained**:
+- `-cpu host`: Use host CPU features (requires KVM)
+- `-smp 4`: 4 virtual CPUs
+- `-m 1G`: 1GB memory
+- `-no-acpi`: Disable ACPI (faster boot)
+- `-no-reboot`: Exit on reboot
+
+### QEMU Console Options
+
+<CodeGroup>
+
+```bash Serial Console
+# Text-mode serial console
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -nographic \
+  -serial stdio
+```
+
+```bash Multiple Consoles
+# Serial + monitor
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -serial stdio \
+  -monitor telnet::45454,server,nowait
+```
+
+```bash VGA Display
+# Graphical console
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -vga std \
+  -serial stdio
+```
+
+</CodeGroup>
+
+## Running on KVM
+
+KVM provides hardware-accelerated virtualization for production workloads.
+
+### Prerequisites
+
+<Steps>
+
+<Step title="Check KVM support">
+
+```bash
+# Check CPU virtualization support
+egrep -c '(vmx|svm)' /proc/cpuinfo
+
+# Should return > 0
+```
+
+</Step>
+
+<Step title="Install KVM">
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install -y qemu-kvm libvirt-daemon-system
+sudo usermod -aG kvm,libvirt $USER
+```
+
+```bash Fedora/RHEL
+sudo dnf install -y qemu-kvm libvirt
+sudo usermod -aG kvm,libvirt $USER
+```
+
+</CodeGroup>
+
+Log out and back in for group changes to take effect.
+
+</Step>
+
+<Step title="Verify KVM access">
+
+```bash
+ls -l /dev/kvm
+# Should show you have read/write access
+```
+
+</Step>
+
+</Steps>
+
+### Running with KVM Acceleration
+
+```bash
+qemu-system-x86_64 \
+  -kernel build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  -cpu host \
+  -m 512M \
+  -nographic
+```
+
+<Note>
+KVM acceleration typically provides 2-5x performance improvement over pure QEMU emulation.
+</Note>
+
+### kraft with KVM
+
+```bash
+# kraft automatically uses KVM when available
+kraft run --plat kvm .
+```
+
+### Production KVM Configuration
+
+```bash
+qemu-system-x86_64 \
+  -kernel build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  -cpu host \
+  -smp 4 \
+  -m 2G \
+  -nographic \
+  -netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
+  -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 \
+  -append "myapp -- netdev.ipv4_addr=192.168.1.10 netdev.ipv4_gw_addr=192.168.1.1 netdev.ipv4_subnet_mask=255.255.255.0"
+```
+
+## Running on Xen
+
+Xen is a type-1 hypervisor commonly used in cloud environments.
+
+### Prerequisites
+
+```bash
+# Install Xen
+sudo apt-get install -y xen-system-amd64 xen-tools
+
+# Reboot into Xen hypervisor
+sudo reboot
+
+# Verify Xen is running
+sudo xl info
+```
+
+### Creating Xen Configuration
+
+Create a Xen domain configuration file:
+
+```python xen.cfg
+name = "myapp"
+kernel = "build/myapp_xen-x86_64"
+memory = 512
+vcpus = 2
+
+# Networking
+vif = ['bridge=xenbr0']
+
+# Console
+serial = "pty"
+
+# Behavior
+on_poweroff = "destroy"
+on_reboot = "restart"
+on_crash = "preserve"
+```
+
+### Running on Xen
+
+<Steps>
+
+<Step title="Create domain">
+
+```bash
+sudo xl create -c xen.cfg
+```
+
+The `-c` flag attaches to console.
+
+</Step>
+
+<Step title="List running domains">
+
+```bash
+sudo xl list
+```
+
+</Step>
+
+<Step title="Attach to console">
+
+```bash
+sudo xl console myapp
+```
+
+Press `Ctrl-]` to detach.
+
+</Step>
+
+<Step title="Shutdown domain">
+
+```bash
+sudo xl shutdown myapp
+```
+
+</Step>
+
+</Steps>
+
+## Kernel Command Line Arguments
+
+Pass arguments to your unikernel at boot:
+
+### With kraft
+
+```bash
+kraft run . -- arg1 arg2 --flag
+```
+
+### With QEMU
+
+```bash
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -append "myapp arg1 arg2 --flag" \
+  -nographic
+```
+
+### Common Boot Arguments
+
+<CodeGroup>
+
+```bash Network
+-append "myapp -- \
+  netdev.ipv4_addr=192.168.1.100 \
+  netdev.ipv4_gw_addr=192.168.1.1 \
+  netdev.ipv4_subnet_mask=255.255.255.0"
+```
+
+```bash Debug
+-append "myapp -- \
+  debug.gdbcon=0 \
+  vfs.rootdev=9pfs \
+  --"
+```
+
+```bash Application
+-append "myapp -- \
+  --port=8080 \
+  --workers=4 \
+  --log-level=info"
+```
+
+</CodeGroup>
+
+<Note>
+The `--` separator distinguishes kernel arguments from application arguments.
+</Note>
+
+## Networking Configuration
+
+### Static IP Configuration
+
+```bash
+kraft run . -- \
+  netdev.ipv4_addr=10.0.0.10 \
+  netdev.ipv4_gw_addr=10.0.0.1 \
+  netdev.ipv4_subnet_mask=255.255.255.0
+```
+
+### DHCP Configuration
+
+```bash
+# DHCP support requires LWIP library with DHCP enabled
+kraft run . -- netdev.ipv4_addr=0.0.0.0
+```
+
+### Port Forwarding
+
+<CodeGroup>
+
+```bash kraft
+kraft run -p 8080:8080 -p 8443:8443 .
+```
+
+```bash QEMU
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -netdev user,id=net0,hostfwd=tcp::8080-:8080,hostfwd=tcp::8443-:8443 \
+  -device virtio-net-pci,netdev=net0 \
+  -nographic
+```
+
+</CodeGroup>
+
+## Advanced Deployment
+
+### Deploying to KraftCloud
+
+KraftCloud provides managed unikernel hosting:
+
+<Steps>
+
+<Step title="Install kraftcloud CLI">
+
+```bash
+kraft cloud login
+```
+
+</Step>
+
+<Step title="Deploy your unikernel">
+
+```bash
+kraft cloud deploy -p 443:8080 -M 512 .
+```
+
+</Step>
+
+<Step title="List instances">
+
+```bash
+kraft cloud ps
+```
+
+</Step>
+
+<Step title="View logs">
+
+```bash
+kraft cloud logs <instance-id>
+```
+
+</Step>
+
+</Steps>
+
+### Using with systemd
+
+Create a systemd service for automatic startup:
+
+```ini /etc/systemd/system/myapp.service
+[Unit]
+Description=MyApp Unikernel
+After=network.target
+
+[Service]
+Type=simple
+User=unikraft
+WorkingDirectory=/opt/myapp
+ExecStart=/usr/bin/qemu-system-x86_64 \
+  -kernel /opt/myapp/build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  -cpu host \
+  -m 512M \
+  -nographic \
+  -netdev tap,id=net0,ifname=tap0,script=no \
+  -device virtio-net-pci,netdev=net0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl enable myapp
+sudo systemctl start myapp
+sudo systemctl status myapp
+```
+
+### Container Integration
+
+Run unikernels in containers:
+
+```dockerfile Dockerfile
+FROM kraftkit.sh/base:latest
+
+COPY build/myapp_qemu-x86_64 /unikernel
+
+CMD ["kraft", "run", "/unikernel"]
+```
+
+Build and run:
+
+```bash
+docker build -t myapp-unikernel .
+docker run -p 8080:8080 myapp-unikernel
+```
+
+## Performance Tuning
+
+### CPU Pinning
+
+```bash
+# Pin to specific CPU cores
+taskset -c 0,1 qemu-system-x86_64 \
+  -kernel build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  -cpu host \
+  -smp 2 \
+  ...
+```
+
+### Huge Pages
+
+```bash
+# Enable huge pages
+sudo sysctl vm.nr_hugepages=512
+
+# Run with huge pages
+qemu-system-x86_64 \
+  -kernel build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  -mem-path /dev/hugepages \
+  -m 1G \
+  ...
+```
+
+### NUMA Awareness
+
+```bash
+# For multi-socket systems
+numactl --cpunodebind=0 --membind=0 qemu-system-x86_64 \
+  -kernel build/myapp_kvm-x86_64 \
+  -enable-kvm \
+  ...
+```
+
+## Monitoring and Logging
+
+### Capture Logs
+
+```bash
+# Redirect output to file
+kraft run . 2>&1 | tee myapp.log
+
+# QEMU serial output to file
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -serial file:console.log \
+  ...
+```
+
+### View Instance Details
+
+```bash
+# kraft instance info
+kraft ps --long
+
+# QEMU monitor
+qemu-system-x86_64 \
+  -kernel build/myapp_qemu-x86_64 \
+  -monitor stdio \
+  ...
+```
+
+## Troubleshooting
+
+### Unikernel Won't Boot
+
+**Check kernel path**:
+```bash
+ls -l build/myapp_qemu-x86_64
+file build/myapp_qemu-x86_64
+```
+
+**Run with verbose output**:
+```bash
+kraft run --log-level debug .
+```
+
+### Network Not Working
+
+**Verify networking is enabled in build**:
+```bash
+grep CONFIG_LIBUKNETDEV .config
+```
+
+**Check QEMU network device**:
+```bash
+qemu-system-x86_64 -device help | grep net
+```
+
+### Performance Issues
+
+**Verify KVM is enabled**:
+```bash
+lsmod | grep kvm
+ls -l /dev/kvm
+```
+
+**Check CPU flags**:
+```bash
+grep -E 'vmx|svm' /proc/cpuinfo
+```
+
+### Port Already in Use
+
+```bash
+# Find process using port
+sudo lsof -i :8080
+
+# Use different port
+kraft run -p 8081:8080 .
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Applications" href="/guides/building-applications" icon="hammer">
+    Build optimized unikernels for deployment
+  </Card>
+  <Card title="Debugging" href="/guides/debugging" icon="bug">
+    Debug running unikernels with GDB
+  </Card>
+  <Card title="Configuration" href="/guides/configuration" icon="gear">
+    Optimize configuration for production
+  </Card>
+  <Card title="KraftCloud" href="https://kraft.cloud" icon="cloud">
+    Deploy to managed cloud platform
+  </Card>
+</CardGroup>

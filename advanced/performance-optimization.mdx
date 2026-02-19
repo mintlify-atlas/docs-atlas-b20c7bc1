@@ -1,0 +1,807 @@
+---
+title: Performance Optimization
+description: Techniques and strategies for optimizing Unikraft applications for maximum performance
+---
+
+Unikraft's design enables exceptional performance through specialization and optimization. This guide covers techniques to maximize your unikernel's performance.
+
+## Understanding Unikraft's Performance Advantages
+
+Unikraft achieves high performance through:
+
+1. **Library OS design**: No context switches between user/kernel space
+2. **Specialization**: Only include needed functionality
+3. **Dead code elimination**: Remove unused code at link time
+4. **Link-Time Optimization (LTO)**: Cross-module optimization
+5. **Zero-copy I/O**: Direct memory access without copying
+6. **Minimal overhead**: No unnecessary abstractions
+7. **Direct hardware access**: No virtualization layer overhead
+
+## Build-Time Optimizations
+
+### Compiler Optimization Levels
+
+Configure optimization in menuconfig or `.config`:
+
+```kconfig
+# Optimize for performance (default for production)
+CONFIG_OPTIMIZE_PERF=y
+
+# Optimize for size
+CONFIG_OPTIMIZE_SIZE=y
+
+# No optimization (debug)
+CONFIG_OPTIMIZE_NONE=y
+```
+
+Performance optimization (`-O2`) is recommended for production:
+
+```makefile
+# In library Makefile.uk - per-file optimization
+LIBMYAPP_HOTPATH_FLAGS-$(CONFIG_OPTIMIZE_PERF) += -O3 -funroll-loops
+LIBMYAPP_HOTPATH_FLAGS-$(CONFIG_OPTIMIZE_PERF) += -march=native
+```
+
+### Link-Time Optimization (LTO)
+
+Enable LTO for cross-module optimization:
+
+```kconfig
+CONFIG_OPTIMIZE_LTO=y
+```
+
+LTO allows the compiler to optimize across library boundaries, inlining and eliminating redundant code globally.
+
+**Trade-offs**:
+- **Pros**: 5-15% performance improvement, smaller binary
+- **Cons**: Slower build times, higher memory usage during compilation
+
+### Dead Code Elimination
+
+Enable function and data section elimination:
+
+```kconfig
+CONFIG_OPTIMIZE_DEADELIM=y
+```
+
+This places each function/data in separate sections and uses `--gc-sections` to remove unused code.
+
+```makefile
+# In Makefile.uk - mark functions for retention
+LIBMYAPP_EXPORTS-y += my_public_api_function
+```
+
+### Library Selection
+
+Only enable required libraries:
+
+```bash
+# Minimal configuration
+kraft configure \
+  CONFIG_LIBUKBOOT=y \
+  CONFIG_LIBUKDEBUG=y \
+  CONFIG_LIBUKALLOC=y \
+  CONFIG_LIBUKALLOCBBUDDY=y
+```
+
+**Example**: For a network application:
+- **Enable**: `libuknetdev`, `libposix-socket`, `liblwip`
+- **Disable**: `libvfscore`, `libposix-process`, filesystem libraries
+
+### Architecture-Specific Optimizations
+
+Target specific CPU features:
+
+```makefile
+# In Makefile.uk
+LIBMYAPP_CFLAGS-$(CONFIG_ARCH_X86_64) += -march=x86-64-v3
+LIBMYAPP_CFLAGS-$(CONFIG_ARCH_X86_64) += -mtune=skylake
+
+# Enable SIMD
+LIBMYAPP_SIMD_FLAGS-y += -msse4.2 -mavx2
+```
+
+For ARM:
+
+```makefile
+LIBMYAPP_CFLAGS-$(CONFIG_ARCH_ARM_64) += -mcpu=cortex-a72
+LIBMYAPP_CFLAGS-$(CONFIG_ARCH_ARM_64) += -mtune=cortex-a72
+```
+
+## Memory Optimization
+
+### Allocator Selection
+
+Choose the right allocator for your workload:
+
+```kconfig
+# Binary buddy allocator (general purpose, fast)
+CONFIG_LIBUKALLOCBBUDDY=y
+
+# Region allocator (simple, for boot-time allocations)
+CONFIG_LIBUKALLOCREGION=y
+
+# Pool allocator (fixed-size objects)
+CONFIG_LIBUKALLOCPOOL=y
+```
+
+**Binary Buddy** (`ukallocbbuddy`):
+- Best for general-purpose workloads
+- O(log n) allocation/deallocation
+- Minimal fragmentation
+
+**Pool Allocator** (`ukallocpool`):
+- Best for frequent same-size allocations
+- O(1) allocation/deallocation
+- Zero fragmentation for fixed sizes
+
+### Memory Pool Pattern
+
+Pre-allocate objects to avoid runtime allocation:
+
+```c
+#include <uk/alloc.h>
+#include <uk/allocpool.h>
+
+struct my_object {
+	int data;
+	// ... fields
+};
+
+static struct uk_allocpool *obj_pool;
+
+int init_object_pool(void)
+{
+	struct uk_alloc *a = uk_alloc_get_default();
+	
+	/* Create pool for 1000 objects */
+	obj_pool = uk_allocpool_create(a, sizeof(struct my_object), 
+				       1000);
+	if (!obj_pool)
+		return -ENOMEM;
+	
+	return 0;
+}
+
+struct my_object *alloc_object(void)
+{
+	return uk_allocpool_take(obj_pool);
+}
+
+void free_object(struct my_object *obj)
+{
+	uk_allocpool_return(obj_pool, obj);
+}
+```
+
+### Stack Memory
+
+Use stack allocation for small, short-lived data:
+
+```c
+/* Good: stack allocation */
+void process_data(void)
+{
+	char buffer[256];
+	parse_input(buffer, sizeof(buffer));
+}
+
+/* Avoid: unnecessary heap allocation */
+void process_data_slow(void)
+{
+	char *buffer = malloc(256);
+	parse_input(buffer, 256);
+	free(buffer);
+}
+```
+
+### Cache-Friendly Data Structures
+
+Align hot data structures to cache lines:
+
+```c
+#include <uk/arch/limits.h>
+
+/* Align structure to cache line (typically 64 bytes) */
+struct cache_aligned_data {
+	volatile int lock;
+	int data;
+	// ... fields
+} __align(__CACHE_LINE_SIZE);
+
+/* Separate read-mostly and write-mostly data */
+struct optimized_struct {
+	/* Hot, read-only data */
+	const int constant_data;
+	void (*function_ptr)(void);
+	
+	/* Padding to separate cache lines */
+	char __padding[__CACHE_LINE_SIZE - 
+		       sizeof(int) - sizeof(void *)];
+	
+	/* Hot, write data */
+	volatile int counter;
+	volatile int state;
+};
+```
+
+### Memory Prefetching
+
+Prefetch data before use:
+
+```c
+#include <uk/arch/lcpu.h>
+
+void process_list(struct node *head)
+{
+	struct node *curr = head;
+	struct node *next;
+	
+	while (curr) {
+		next = curr->next;
+		
+		/* Prefetch next node while processing current */
+		if (next)
+			ukarch_prefetch(next);
+		
+		process_node(curr);
+		curr = next;
+	}
+}
+```
+
+## CPU and Scheduling Optimizations
+
+### Avoid Context Switches
+
+Unikraft's cooperative scheduler minimizes overhead:
+
+```kconfig
+# Use cooperative scheduler
+CONFIG_LIBUKSCHEDCOOP=y
+```
+
+Cooperative scheduling avoids involuntary preemption:
+
+```c
+#include <uk/sched.h>
+
+void cooperative_task(void)
+{
+	while (work_available()) {
+		do_work();
+		
+		/* Explicitly yield to other threads */
+		uk_sched_yield();
+	}
+}
+```
+
+### Thread Affinity
+
+Pin threads to specific CPUs:
+
+```c
+#include <uk/sched.h>
+
+void pin_to_cpu(struct uk_thread *thread, unsigned int cpu_id)
+{
+	uk_thread_set_affinity(thread, cpu_id);
+}
+
+/* Create thread on specific CPU */
+struct uk_thread *create_pinned_thread(unsigned int cpu_id)
+{
+	struct uk_thread *t;
+	
+	t = uk_thread_create("worker", worker_func, NULL);
+	if (!t)
+		return NULL;
+	
+	uk_thread_set_affinity(t, cpu_id);
+	return t;
+}
+```
+
+### Interrupt Handling Optimization
+
+Minimize time in interrupt context:
+
+```c
+#include <uk/plat/irq.h>
+#include <uk/sched.h>
+
+/* Fast interrupt handler */
+static int device_irq_handler(void *arg)
+{
+	struct device *dev = arg;
+	
+	/* Minimal work in IRQ context */
+	dev->status = read_device_status();
+	
+	/* Wake up processing thread */
+	uk_thread_wake(dev->worker_thread);
+	
+	return 1; /* IRQ handled */
+}
+
+/* Worker thread does heavy lifting */
+static void device_worker(void *arg)
+{
+	struct device *dev = arg;
+	
+	while (1) {
+		/* Sleep until IRQ */
+		uk_thread_block(uk_thread_current());
+		uk_sched_yield();
+		
+		/* Process in thread context */
+		process_device_data(dev);
+	}
+}
+```
+
+## I/O Optimization
+
+### Zero-Copy I/O
+
+Avoid memory copies in I/O path:
+
+```c
+#include <uk/netdev.h>
+#include <uk/netbuf.h>
+
+/* Bad: copy data */
+void send_data_copy(struct uk_netdev *dev, void *data, size_t len)
+{
+	struct uk_netbuf *nb;
+	
+	nb = uk_netbuf_alloc(len);
+	memcpy(uk_netbuf_data(nb), data, len);  /* Copy! */
+	uk_netdev_tx_one(dev, 0, nb);
+}
+
+/* Good: zero-copy */
+void send_data_zerocopy(struct uk_netdev *dev, struct uk_netbuf *nb)
+{
+	/* Data already in netbuf, no copy */
+	uk_netdev_tx_one(dev, 0, nb);
+}
+```
+
+### Batched I/O
+
+Process I/O in batches:
+
+```c
+#include <uk/netdev.h>
+
+#define BATCH_SIZE 32
+
+void process_rx_batch(struct uk_netdev *dev)
+{
+	struct uk_netbuf *nb[BATCH_SIZE];
+	int count, i;
+	
+	/* Receive batch */
+	count = uk_netdev_rx_burst(dev, 0, nb, BATCH_SIZE);
+	
+	/* Process all at once */
+	for (i = 0; i < count; i++) {
+		process_packet(nb[i]);
+		uk_netbuf_free(nb[i]);
+	}
+}
+```
+
+### Buffer Management
+
+Reuse buffers to avoid allocation overhead:
+
+```c
+struct buffer_pool {
+	struct uk_netbuf *buffers[POOL_SIZE];
+	int head;
+	int tail;
+};
+
+static struct buffer_pool rx_pool;
+
+void init_buffer_pool(void)
+{
+	int i;
+	
+	for (i = 0; i < POOL_SIZE; i++) {
+		rx_pool.buffers[i] = uk_netbuf_alloc(MTU_SIZE);
+	}
+	rx_pool.head = 0;
+	rx_pool.tail = POOL_SIZE;
+}
+
+struct uk_netbuf *get_rx_buffer(void)
+{
+	if (rx_pool.head == rx_pool.tail)
+		return NULL; /* Pool empty */
+	
+	return rx_pool.buffers[rx_pool.head++];
+}
+
+void return_rx_buffer(struct uk_netbuf *nb)
+{
+	uk_netbuf_reset(nb);
+	rx_pool.buffers[rx_pool.tail++] = nb;
+}
+```
+
+## Syscall Optimization
+
+### Direct Function Calls
+
+When possible, use Unikraft APIs directly instead of syscalls:
+
+```c
+/* Slower: syscall overhead */
+#include <unistd.h>
+ssize_t n = write(fd, buf, len);
+
+/* Faster: direct API call */
+#include <uk/file.h>
+ssize_t n = uk_file_write(file, buf, len);
+```
+
+### Minimize Syscall Count
+
+Batch operations to reduce syscall overhead:
+
+```c
+/* Bad: multiple syscalls */
+for (i = 0; i < count; i++) {
+	write(fd, &data[i], sizeof(data[0]));
+}
+
+/* Good: single syscall */
+write(fd, data, count * sizeof(data[0]));
+```
+
+## Application-Level Optimizations
+
+### Hot Path Optimization
+
+Identify and optimize hot paths using profiling:
+
+```c
+/* Mark hot functions for optimization */
+__attribute__((hot))
+int process_hot_path(void)
+{
+	/* Critical performance path */
+	return fast_operation();
+}
+
+/* Mark cold functions */
+__attribute__((cold))
+int handle_error(void)
+{
+	/* Rarely executed error path */
+	return cleanup();
+}
+```
+
+### Branch Prediction Hints
+
+Help the compiler with branch predictions:
+
+```c
+#include <uk/essentials.h>
+
+/* Likely branch */
+if (likely(common_case)) {
+	handle_common_case();
+} else {
+	handle_rare_case();
+}
+
+/* Unlikely branch */
+if (unlikely(error_condition)) {
+	handle_error();
+}
+```
+
+### Inline Functions
+
+Inline small, frequently-called functions:
+
+```c
+/* Force inline for performance-critical code */
+static inline __attribute__((always_inline))
+int fast_check(int value)
+{
+	return value & MASK;
+}
+
+/* Let compiler decide */
+static inline int maybe_inline(int value)
+{
+	return value * 2;
+}
+```
+
+### Loop Optimization
+
+Optimize loops for cache and branch prediction:
+
+```c
+/* Unroll small loops */
+void process_array_unrolled(int *arr, int len)
+{
+	int i;
+	
+	/* Process 4 at a time */
+	for (i = 0; i < len - 3; i += 4) {
+		process(arr[i]);
+		process(arr[i+1]);
+		process(arr[i+2]);
+		process(arr[i+3]);
+	}
+	
+	/* Handle remainder */
+	for (; i < len; i++) {
+		process(arr[i]);
+	}
+}
+
+/* Compiler hint for loop unrolling */
+void process_array_hint(int *arr, int len)
+{
+	#pragma GCC unroll 4
+	for (int i = 0; i < len; i++) {
+		process(arr[i]);
+	}
+}
+```
+
+## Measurement and Profiling
+
+### Built-in Performance Counters
+
+Use Unikraft's timing facilities:
+
+```c
+#include <uk/plat/time.h>
+#include <uk/print.h>
+
+void measure_operation(void)
+{
+	__nsec start, end, elapsed;
+	
+	start = ukplat_monotonic_clock();
+	
+	/* Operation to measure */
+	do_work();
+	
+	end = ukplat_monotonic_clock();
+	elapsed = end - start;
+	
+	uk_pr_info("Operation took %lu ns\n", elapsed);
+}
+```
+
+### Microbenchmarking
+
+Create microbenchmarks for critical paths:
+
+```c
+#include <uk/plat/time.h>
+
+#define ITERATIONS 10000
+
+__nsec benchmark_function(void (*func)(void))
+{
+	__nsec start, end;
+	int i;
+	
+	start = ukplat_monotonic_clock();
+	
+	for (i = 0; i < ITERATIONS; i++) {
+		func();
+	}
+	
+	end = ukplat_monotonic_clock();
+	
+	return (end - start) / ITERATIONS;
+}
+
+void run_benchmarks(void)
+{
+	__nsec avg;
+	
+	avg = benchmark_function(operation1);
+	uk_pr_info("operation1: %lu ns/iter\n", avg);
+	
+	avg = benchmark_function(operation2);
+	uk_pr_info("operation2: %lu ns/iter\n", avg);
+}
+```
+
+### Statistics Collection
+
+Enable allocation statistics:
+
+```kconfig
+CONFIG_LIBUKALLOC_IFSTATS=y
+CONFIG_LIBUKALLOC_IFSTATS_GLOBAL=y
+```
+
+Query at runtime:
+
+```c
+#include <uk/alloc.h>
+
+void print_alloc_stats(void)
+{
+	struct uk_alloc *a = uk_alloc_get_default();
+	struct uk_alloc_stats stats;
+	
+	uk_alloc_stats(a, &stats);
+	
+	uk_pr_info("Allocations: %lu\n", stats.nb_allocs);
+	uk_pr_info("Frees: %lu\n", stats.nb_frees);
+	uk_pr_info("Memory used: %lu bytes\n", stats.cur_mem);
+	uk_pr_info("Peak memory: %lu bytes\n", stats.max_mem);
+}
+```
+
+## Network Performance
+
+### RSS/Multi-queue
+
+Configure receive-side scaling:
+
+```kconfig
+CONFIG_LIBUKNETDEV_DISPATCHERTHREADS=y
+```
+
+```c
+#include <uk/netdev.h>
+
+void configure_netdev_queues(struct uk_netdev *dev)
+{
+	struct uk_netdev_conf conf = {
+		.nb_rx_queues = 4,  /* Match CPU count */
+		.nb_tx_queues = 4,
+	};
+	
+	uk_netdev_configure(dev, &conf);
+}
+```
+
+### TCP Optimization
+
+Tune TCP stack parameters:
+
+```c
+/* For lwIP in kraft.yaml */
+libraries:
+  lwip:
+    kconfig:
+      - CONFIG_LWIP_TCP_WND=65535
+      - CONFIG_LWIP_TCP_SND_BUF=65535
+      - CONFIG_LWIP_WND_SCALE=y
+```
+
+## Common Performance Anti-Patterns
+
+### Avoid
+
+1. **Excessive locking**: Use lock-free data structures where possible
+2. **Unnecessary allocations**: Reuse buffers and objects
+3. **Deep call stacks**: Inline or flatten hot paths
+4. **Virtual function calls**: Use direct calls in performance-critical code
+5. **String operations**: Cache results, use fixed buffers
+6. **Debug code in production**: Disable assertions and debug prints
+7. **Unaligned accesses**: Ensure proper alignment
+
+### Example: Lock-Free Queue
+
+```c
+#include <uk/ring.h>
+
+struct message_queue {
+	struct uk_ring ring;
+	void *buffer[QUEUE_SIZE];
+};
+
+/* Producer: no locks needed */
+int enqueue_message(struct message_queue *mq, void *msg)
+{
+	return uk_ring_enqueue(&mq->ring, msg);
+}
+
+/* Consumer: no locks needed */
+void *dequeue_message(struct message_queue *mq)
+{
+	void *msg;
+	
+	if (uk_ring_dequeue(&mq->ring, &msg) == 0)
+		return msg;
+	
+	return NULL;
+}
+```
+
+## Configuration Examples
+
+### Maximum Performance Configuration
+
+```kconfig
+# Optimization
+CONFIG_OPTIMIZE_PERF=y
+CONFIG_OPTIMIZE_LTO=y
+CONFIG_OPTIMIZE_DEADELIM=y
+
+# Fast allocator
+CONFIG_LIBUKALLOCBBUDDY=y
+
+# Minimal debug
+CONFIG_DEBUG_SYMBOLS_LVL0=y
+CONFIG_LIBUKDEBUG_PRINTK=n
+CONFIG_LIBUKDEBUG_PRINTD=n
+
+# Cooperative scheduling
+CONFIG_LIBUKSCHEDCOOP=y
+CONFIG_LIBUKSCHED_TCB_INIT=n
+```
+
+### Balanced Configuration
+
+```kconfig
+# Optimization with debug symbols
+CONFIG_OPTIMIZE_PERF=y
+CONFIG_DEBUG_SYMBOLS_LVL2=y
+
+# Standard allocator
+CONFIG_LIBUKALLOCBBUDDY=y
+
+# Limited debug output
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTD=n
+CONFIG_LIBUKDEBUG_PRINT_TIME=y
+```
+
+## Performance Checklist
+
+- [ ] Enable appropriate optimization level
+- [ ] Select minimal required libraries
+- [ ] Use efficient allocator for workload
+- [ ] Implement zero-copy I/O where possible
+- [ ] Batch operations to reduce overhead
+- [ ] Profile and optimize hot paths
+- [ ] Minimize syscall overhead
+- [ ] Use cache-friendly data structures
+- [ ] Implement proper memory management
+- [ ] Disable unnecessary debug output
+- [ ] Test with realistic workloads
+
+## Benchmarking
+
+Compare Unikraft with traditional systems:
+
+```bash
+# Boot time comparison
+time kraft run --detach app:latest
+time docker run --detach app:latest
+
+# Memory usage
+kraft ps --all
+docker stats
+
+# Request latency
+ab -n 10000 -c 100 http://unikernel-ip/
+ab -n 10000 -c 100 http://container-ip/
+```
+
+## Next Steps
+
+- [Porting Applications](/advanced/porting-applications)
+- [Creating Libraries](/advanced/creating-libraries)
+- [Platform Development](/advanced/platform-development)

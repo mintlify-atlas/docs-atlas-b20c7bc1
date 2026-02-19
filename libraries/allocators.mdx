@@ -1,0 +1,813 @@
+---
+title: allocators - Memory Allocator Implementations
+description: Memory allocator algorithms and implementations in Unikraft
+---
+
+# Memory Allocator Implementations
+
+Unikraft provides multiple memory allocator implementations, each optimized for different use cases and performance characteristics. This page documents the allocator interface and the various concrete implementations available.
+
+## Overview
+
+The allocator subsystem provides a unified interface (`uk_alloc`) for memory management, with multiple backend implementations:
+
+- **ukalloc** - Base allocator interface and common functionality
+- **ukallocbbuddy** - Binary buddy allocator for general-purpose allocation
+- **ukallocpool** - Fixed-size object pool allocator (LIFO)
+- **ukallocregion** - Fast bump-pointer region allocator
+- **ukallocstack** - Specialized stack allocator with guard pages
+
+Each allocator can be instantiated multiple times and accessed through the common `uk_alloc` interface.
+
+## Common Allocator Interface (ukalloc)
+
+### Core Structure
+
+```c
+struct uk_alloc {
+    /* Object allocation */
+    uk_alloc_malloc_func_t malloc;
+    uk_alloc_calloc_func_t calloc;
+    uk_alloc_realloc_func_t realloc;
+    uk_alloc_posix_memalign_func_t posix_memalign;
+    uk_alloc_memalign_func_t memalign;
+    uk_alloc_free_func_t free;
+    
+    /* Page allocation */
+    uk_alloc_palloc_func_t palloc;
+    uk_alloc_pfree_func_t pfree;
+    
+    /* Optional interfaces */
+    uk_alloc_getsize_func_t maxalloc;      /* Largest request (bytes) */
+    uk_alloc_getsize_func_t availmem;      /* Available memory (bytes) */
+    uk_alloc_getpsize_func_t pmaxalloc;    /* Largest request (pages) */
+    uk_alloc_getpsize_func_t pavailmem;    /* Available pages */
+    uk_alloc_addmem_func_t addmem;         /* Add memory region */
+    
+    /* Statistics (if enabled) */
+#if CONFIG_LIBUKALLOC_IFSTATS
+    struct uk_alloc_stats _stats;
+#endif
+    
+    /* Internal */
+    struct uk_alloc *next;
+    __u8 priv[];
+};
+```
+
+### Object Allocation API
+
+#### uk_malloc
+```c
+void *uk_malloc(struct uk_alloc *a, __sz size);
+```
+Allocates an object of `size` bytes.
+
+**Parameters:**
+- `a` - Allocator
+- `size` - Number of bytes to allocate
+
+**Returns:** Pointer to allocation or `NULL` on failure
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:159`
+
+#### uk_calloc
+```c
+void *uk_calloc(struct uk_alloc *a, __sz nmemb, __sz size);
+```
+Allocates an array of `nmemb` elements of `size` bytes each, zeroed.
+
+**Parameters:**
+- `a` - Allocator
+- `nmemb` - Number of elements
+- `size` - Size of each element
+
+**Returns:** Pointer to zeroed allocation or `NULL` on failure
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:186`
+
+#### uk_realloc
+```c
+void *uk_realloc(struct uk_alloc *a, void *ptr, __sz size);
+```
+Resizes the allocation at `ptr` to `size` bytes, preserving contents.
+
+**Parameters:**
+- `a` - Allocator
+- `ptr` - Existing allocation
+- `size` - New size in bytes
+
+**Returns:** Pointer to resized allocation or `NULL` on failure
+
+<Warning>
+Do not use `ptr` after this call completes successfully, as it may have been moved.
+</Warning>
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:222`
+
+#### uk_memalign
+```c
+void *uk_memalign(struct uk_alloc *a, __sz align, __sz size);
+```
+Allocates `size` bytes aligned to `align` boundary.
+
+**Parameters:**
+- `a` - Allocator
+- `align` - Alignment requirement (must be power of 2)
+- `size` - Number of bytes to allocate
+
+**Returns:** Pointer to aligned allocation or `NULL` on failure
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:280`
+
+#### uk_posix_memalign
+```c
+int uk_posix_memalign(struct uk_alloc *a, void **memptr,
+                      __sz align, __sz size);
+```
+POSIX-compliant aligned allocation.
+
+**Parameters:**
+- `a` - Allocator
+- `memptr` - Pointer to store allocation address
+- `align` - Alignment requirement
+- `size` - Number of bytes to allocate
+
+**Returns:** 0 on success, positive error code on failure
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:251`
+
+#### uk_free
+```c
+void uk_free(struct uk_alloc *a, void *ptr);
+```
+Frees the allocation at `ptr`.
+
+**Parameters:**
+- `a` - Allocator
+- `ptr` - Pointer to free (or `NULL` to do nothing)
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:304`
+
+### Page Allocation API
+
+#### uk_palloc
+```c
+void *uk_palloc(struct uk_alloc *a, unsigned long num_pages);
+```
+Allocates `num_pages` contiguous pages.
+
+**Parameters:**
+- `a` - Allocator
+- `num_pages` - Number of pages to allocate
+
+**Returns:** Pointer to first page or `NULL` on failure
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:325`
+
+#### uk_pfree
+```c
+void uk_pfree(struct uk_alloc *a, void *ptr, unsigned long num_pages);
+```
+Frees `num_pages` previously allocated pages.
+
+**Parameters:**
+- `a` - Allocator
+- `ptr` - Start of page region (must be page-aligned)
+- `num_pages` - Number of pages to free
+
+<Note>
+Pages obtained in a single `palloc()` call may be freed through any combination of `pfree()` calls, as long as each page is freed exactly once.
+</Note>
+
+**Location:** `lib/ukalloc/include/uk/alloc.h:353`
+
+### Allocator Management
+
+#### uk_alloc_get_default
+```c
+struct uk_alloc *uk_alloc_get_default(void);
+```
+Returns the default allocator for the application.
+
+#### uk_alloc_foreach
+```c
+#define uk_alloc_foreach(iter)
+```
+Iterates over all registered allocators.
+
+**Example:**
+```c
+struct uk_alloc *a;
+uk_alloc_foreach(a) {
+    printf("Allocator available mem: %ld\n",
+           uk_alloc_availmem(a));
+}
+```
+
+### Query Functions
+
+```c
+/* Largest single allocation possible */
+__ssz uk_alloc_maxalloc(struct uk_alloc *a);
+long uk_alloc_pmaxalloc(struct uk_alloc *a);
+
+/* Total available memory */
+__ssz uk_alloc_availmem(struct uk_alloc *a);
+long uk_alloc_pavailmem(struct uk_alloc *a);
+__sz uk_alloc_availmem_total(void);
+unsigned long uk_alloc_pavailmem_total(void);
+```
+
+### Statistics API
+
+When `CONFIG_LIBUKALLOC_IFSTATS` is enabled:
+
+```c
+struct uk_alloc_stats {
+    __sz last_alloc_size;    /* Size of last allocation */
+    __sz max_alloc_size;     /* Largest allocation */
+    __sz min_alloc_size;     /* Smallest allocation */
+    
+    __u64 tot_nb_allocs;     /* Total allocations */
+    __u64 tot_nb_frees;      /* Total frees */
+    __s64 cur_nb_allocs;     /* Current active allocations */
+    __s64 max_nb_allocs;     /* Peak active allocations */
+    
+    __ssz cur_mem_use;       /* Current memory in use */
+    __ssz max_mem_use;       /* Peak memory usage */
+    
+    __u64 nb_enomem;         /* Failed allocations */
+};
+
+void uk_alloc_stats_get(struct uk_alloc *a,
+                        struct uk_alloc_stats *dst);
+```
+
+## Binary Buddy Allocator (ukallocbbuddy)
+
+A general-purpose allocator based on the binary buddy system from Xen.
+
+### Algorithm
+
+The buddy allocator:
+- Manages memory in power-of-two sized blocks
+- Maintains free lists for each order (size)
+- Coalesces adjacent free blocks into larger ones
+- Splits larger blocks when smaller allocations needed
+
+**Time Complexity:**
+- Allocation: O(log n) where n is the maximum order
+- Deallocation: O(log n) with coalescing
+
+**Space Complexity:**
+- Bitmap: 1 bit per page
+- Free lists: Minimal overhead per block
+
+### Initialization
+
+```c
+struct uk_alloc *uk_allocbbuddy_init(void *base, size_t len);
+```
+
+Initializes a buddy allocator on the memory region `[base, base+len)`.
+
+**Parameters:**
+- `base` - Base address of memory region
+- `len` - Length of memory region in bytes
+
+**Returns:** Initialized allocator or `NULL` on failure
+
+**Location:** `lib/ukallocbbuddy/include/uk/allocbbuddy.h:43`
+
+### Usage Example
+
+```c
+#include <uk/allocbbuddy.h>
+
+void buddy_example(void)
+{
+    // Assume we have a memory region
+    void *memory_region = ...; // 1MB region
+    size_t region_size = 1024 * 1024;
+    
+    // Initialize buddy allocator
+    struct uk_alloc *a = uk_allocbbuddy_init(memory_region,
+                                             region_size);
+    if (!a) {
+        printf("Failed to initialize buddy allocator\n");
+        return;
+    }
+    
+    // Use it for allocations
+    void *ptr1 = uk_malloc(a, 128);
+    void *ptr2 = uk_malloc(a, 4096);
+    void *ptr3 = uk_palloc(a, 4); // 4 pages
+    
+    // Free allocations
+    uk_free(a, ptr1);
+    uk_free(a, ptr2);
+    uk_pfree(a, ptr3, 4);
+}
+```
+
+### Configuration
+
+- `CONFIG_LIBUKALLOCBBUDDY_FREELIST_SANITY` - Enable sanity checking of free lists
+
+### Internal Structure
+
+```c
+struct uk_bbpalloc {
+    unsigned long nr_free_pages;
+    struct uk_hlist_head free_head[FREELIST_SIZE];
+    struct uk_bbpalloc_memr *memr_head;
+};
+
+struct uk_bbpalloc_memr {
+    struct uk_bbpalloc_memr *next;
+    unsigned long first_page;
+    unsigned long nr_pages;
+    unsigned long mm_alloc_bitmap_size;
+    unsigned long *mm_alloc_bitmap;
+};
+```
+
+**Key Features:**
+- Multiple memory regions supported
+- Bitmap tracking for allocation state
+- Separate free lists per order
+- Sanity checking available for debugging
+
+### Best For
+
+- General-purpose allocation
+- Long-running systems with varied allocation sizes
+- When fragmentation is a concern
+- Systems requiring good coalescing behavior
+
+## Pool Allocator (ukallocpool)
+
+A fixed-size object pool using LIFO (Last-In-First-Out) principle.
+
+### Algorithm
+
+The pool allocator:
+- Pre-allocates all objects at initialization
+- Maintains a free list of available objects
+- Returns objects in LIFO order (cache-friendly)
+- O(1) allocation and deallocation
+
+**Time Complexity:**
+- Allocation: O(1)
+- Deallocation: O(1)
+
+**Space Complexity:**
+- Fixed overhead per pool
+- No per-object metadata once allocated
+
+### Initialization
+
+#### uk_allocpool_reqmem
+```c
+__sz uk_allocpool_reqmem(unsigned int obj_count, __sz obj_len,
+                         __sz obj_align);
+```
+Computes required memory for a pool.
+
+**Parameters:**
+- `obj_count` - Number of objects
+- `obj_len` - Size of each object
+- `obj_align` - Alignment requirement
+
+**Returns:** Number of bytes needed
+
+**Location:** `lib/ukallocpool/include/uk/allocpool.h:60`
+
+#### uk_allocpool_alloc
+```c
+struct uk_allocpool *uk_allocpool_alloc(struct uk_alloc *parent,
+                                        unsigned int obj_count,
+                                        __sz obj_len, __sz obj_align);
+```
+Allocates a pool on a parent allocator.
+
+**Parameters:**
+- `parent` - Parent allocator
+- `obj_count` - Number of objects to allocate
+- `obj_len` - Size of each object
+- `obj_align` - Alignment requirement
+
+**Returns:** Initialized pool or `NULL` on failure
+
+**Location:** `lib/ukallocpool/include/uk/allocpool.h:78`
+
+#### uk_allocpool_init
+```c
+struct uk_allocpool *uk_allocpool_init(void *base, __sz len,
+                                       __sz obj_len, __sz obj_align);
+```
+Initializes a pool on a given memory range.
+
+**Parameters:**
+- `base` - Base address
+- `len` - Length of memory range
+- `obj_len` - Size of each object
+- `obj_align` - Alignment requirement
+
+**Returns:** Initialized pool or `NULL` on failure
+
+**Location:** `lib/ukallocpool/include/uk/allocpool.h:110`
+
+### Pool Operations
+
+#### uk_allocpool_take
+```c
+void *uk_allocpool_take(struct uk_allocpool *p);
+```
+Gets one object from the pool (recommended over `uk_malloc()`).
+
+**Returns:** Pointer to object or `NULL` if pool exhausted
+
+**Location:** `lib/ukallocpool/include/uk/allocpool.h:167`
+
+#### uk_allocpool_return
+```c
+void uk_allocpool_return(struct uk_allocpool *p, void *obj);
+```
+Returns one object to the pool (recommended over `uk_free()`).
+
+**Location:** `lib/ukallocpool/include/uk/allocpool.h:195`
+
+#### Batch Operations
+
+```c
+unsigned int uk_allocpool_take_batch(struct uk_allocpool *p,
+                                     void *obj[], unsigned int count);
+
+void uk_allocpool_return_batch(struct uk_allocpool *p,
+                               void *obj[], unsigned int count);
+```
+
+### Query Functions
+
+```c
+unsigned int uk_allocpool_availcount(struct uk_allocpool *p);
+unsigned int uk_allocpool_maxcount(struct uk_allocpool *p);
+__sz uk_allocpool_objlen(struct uk_allocpool *p);
+struct uk_alloc *uk_allocpool2ukalloc(struct uk_allocpool *p);
+```
+
+### Usage Example
+
+```c
+#include <uk/allocpool.h>
+
+struct my_object {
+    int id;
+    char data[64];
+};
+
+void pool_example(void)
+{
+    struct uk_alloc *parent = uk_alloc_get_default();
+    
+    // Create a pool for 100 objects
+    struct uk_allocpool *pool = 
+        uk_allocpool_alloc(parent, 100,
+                          sizeof(struct my_object),
+                          __alignof__(struct my_object));
+    
+    if (!pool) {
+        printf("Failed to create pool\n");
+        return;
+    }
+    
+    // Use the pool directly (fast path)
+    struct my_object *obj1 = uk_allocpool_take(pool);
+    struct my_object *obj2 = uk_allocpool_take(pool);
+    
+    // Or use via uk_alloc interface
+    struct uk_alloc *a = uk_allocpool2ukalloc(pool);
+    struct my_object *obj3 = uk_malloc(a, sizeof(*obj3));
+    
+    // Return objects
+    uk_allocpool_return(pool, obj1);
+    uk_allocpool_return(pool, obj2);
+    uk_free(a, obj3);
+    
+    // Clean up
+    uk_allocpool_free(pool);
+}
+```
+
+### Memory Layout
+
+```
+++---------------------++
+|| struct uk_allocpool ||
+||                     ||
+++---------------------++
+|    // padding //      |
++=======================+
+|       OBJECT 1        |
++=======================+
+|       OBJECT 2        |
++=======================+
+|       OBJECT 3        |
++=======================+
+|         ...           |
+```
+
+### Best For
+
+- Fixed-size object allocation
+- Network packet buffers
+- Event structures
+- Cache-friendly allocation patterns
+- Avoiding fragmentation
+- Predictable memory usage
+
+## Region Allocator (ukallocregion)
+
+A minimalist bump-pointer allocator for fast allocation without deallocation.
+
+### Algorithm
+
+The region allocator:
+- Maintains a single pointer to free space
+- Allocation bumps pointer forward
+- No per-object metadata
+- No deallocation support (region-granularity only)
+
+**Time Complexity:**
+- Allocation: O(1)
+- Deallocation: Not supported
+
+**Space Complexity:**
+- Minimal overhead (single pointer)
+
+### Initialization
+
+```c
+struct uk_allocregion *uk_allocregion_init(void *base, size_t len);
+```
+
+Initializes a region allocator on memory range `[base, base+len)`.
+
+**Parameters:**
+- `base` - Base address
+- `len` - Length in bytes
+
+**Returns:** Initialized region or `NULL`
+
+**Location:** `lib/ukallocregion/include/uk/allocregion.h:94`
+
+### Operations
+
+#### uk_allocregion_bump
+```c
+void *uk_allocregion_bump(struct uk_allocregion *a, size_t size);
+```
+Allocates `size` bytes from the region.
+
+**Parameters:**
+- `a` - Region allocator
+- `size` - Number of bytes
+
+**Returns:** Pointer to allocation or `NULL` if exhausted
+
+**Location:** `lib/ukallocregion/include/uk/allocregion.h:59`
+
+#### uk_allocregion_availmem
+```c
+size_t uk_allocregion_availmem(const struct uk_allocregion *ar);
+```
+Returns remaining space in the region.
+
+**Location:** `lib/ukallocregion/include/uk/allocregion.h:69`
+
+### Usage Example
+
+```c
+#include <uk/allocregion.h>
+
+void region_example(void)
+{
+    void *memory = malloc(1024 * 1024); // 1MB
+    struct uk_allocregion *region =
+        uk_allocregion_init(memory, 1024 * 1024);
+    
+    if (!region) {
+        printf("Failed to create region\n");
+        return;
+    }
+    
+    // Fast allocations (no free needed/possible)
+    void *ptr1 = uk_allocregion_bump(region, 128);
+    void *ptr2 = uk_allocregion_bump(region, 256);
+    void *ptr3 = uk_allocregion_bump(region, 512);
+    
+    // Or use via uk_alloc interface
+    struct uk_alloc *a = uk_allocregion2ukalloc(region);
+    void *ptr4 = uk_malloc(a, 64);
+    
+    // Check remaining space
+    printf("Available: %zu bytes\n",
+           uk_allocregion_availmem(region));
+    
+    // No individual frees - just free the whole region later
+    free(memory);
+}
+```
+
+### Best For
+
+- Bootstrap/initialization code
+- Temporary allocations with region lifetime
+- Phase-based memory management
+- Maximum speed allocation
+- Baseline performance measurements
+- Nested allocator context
+
+<Warning>
+Individual deallocations are not supported. All memory is reclaimed when the entire region is destroyed.
+</Warning>
+
+## Stack Allocator (ukallocstack)
+
+Specialized allocator for thread stacks with guard pages and automatic growth.
+
+### Features
+
+- Automatic integration with `ukvmem` for virtual memory management
+- Configurable guard pages at top and bottom
+- Pre-paged-in size support to reduce page faults
+- Consistent stack configuration across allocations
+
+### Initialization
+
+```c
+struct uk_alloc *uk_allocstack_init(struct uk_alloc *a,
+                                    struct uk_vas *vas,
+                                    __sz premapped_len);
+```
+
+Initializes a stack allocator.
+
+**Parameters:**
+- `a` - Parent allocator for internal structures
+- `vas` - Virtual address space for stack VMAs (when `CONFIG_LIBUKVMEM` enabled)
+- `premapped_len` - Initial pre-paged-in size from top to bottom
+
+**Returns:** Stack allocator or `NULL` on error
+
+<Note>
+Maximum alignment for `memalign()`/`posix_memalign()` is `PAGE_SIZE` when guard pages are enabled.
+</Note>
+
+**Location:** `lib/ukallocstack/include/uk/allocstack.h:53`
+
+### Usage Example
+
+```c
+#include <uk/allocstack.h>
+#include <uk/vmem.h>
+
+void stack_allocator_example(void)
+{
+    struct uk_alloc *parent = uk_alloc_get_default();
+    struct uk_vas *vas = uk_vas_get_active();
+    __sz premap_size = PAGE_SIZE * 4; // 16KB pre-paged
+    
+    // Create stack allocator
+    struct uk_alloc *stack_alloc =
+        uk_allocstack_init(parent, vas, premap_size);
+    
+    if (!stack_alloc) {
+        printf("Failed to create stack allocator\n");
+        return;
+    }
+    
+    // Allocate stacks
+    __sz stack_size = 1024 * 1024; // 1MB
+    void *stack1 = uk_malloc(stack_alloc, stack_size);
+    void *stack2 = uk_malloc(stack_alloc, stack_size);
+    
+    // Stacks have guard pages and are properly aligned
+    // Top 16KB is pre-paged-in to avoid initial faults
+    
+    // Free stacks when threads exit
+    uk_free(stack_alloc, stack1);
+    uk_free(stack_alloc, stack2);
+}
+```
+
+### Configuration
+
+Guard page sizes are configurable:
+- `CONFIG_LIBUKVMEM_STACK_GUARD_PAGES_TOP`
+- `CONFIG_LIBUKVMEM_STACK_GUARD_PAGES_BOTTOM`
+
+### Pre-mapped Length Behavior
+
+The `premapped_len` parameter controls how many pages are pre-faulted:
+
+- `premapped_len == 0`: No pages pre-mapped (maximum laziness)
+- `premapped_len == PAGE_SIZE * 2`: Top two pages paged-in
+- `premapped_len == stack_size`: Entire stack paged-in (no page faults)
+
+If allocating a stack smaller than `premapped_len`, the entire stack is paged-in.
+
+### Best For
+
+- Thread stack allocation
+- Consistent stack configuration
+- Guard page protection
+- Reducing page faults on stack growth
+
+## Comparison Matrix
+
+| Feature | Buddy | Pool | Region | Stack |
+|---------|-------|------|--------|-------|
+| **Allocation Speed** | O(log n) | O(1) | O(1) | O(1) |
+| **Deallocation** | Yes | Yes | No | Yes |
+| **Fragmentation** | Low (coalescing) | None | None | None |
+| **Memory Overhead** | Low | Low | Minimal | Low |
+| **Variable Sizes** | Yes | No | Yes | Stack-specific |
+| **Best Use Case** | General | Fixed objects | Bootstrap | Thread stacks |
+
+## Choosing an Allocator
+
+### Use Binary Buddy When:
+- Need general-purpose allocation
+- Variable allocation sizes
+- Long-running system with mixed workload
+- Fragmentation is a concern
+
+### Use Pool When:
+- Allocating many same-sized objects
+- Need predictable performance
+- Allocation/deallocation patterns are frequent
+- Cache locality matters
+
+### Use Region When:
+- Fast bootstrap required
+- Phase-based memory usage
+- No individual deallocation needed
+- Temporary scratch space
+
+### Use Stack When:
+- Allocating thread stacks
+- Need guard page protection
+- Want consistent stack configuration
+- Integration with `ukvmem` required
+
+## Advanced: Custom Allocators
+
+To implement a custom allocator:
+
+1. Define allocation functions
+2. Create `uk_alloc` structure
+3. Initialize function pointers
+4. Optionally implement statistics
+
+**Example skeleton:**
+```c
+struct my_allocator {
+    struct uk_alloc uk_alloc_if;
+    // Custom fields
+};
+
+static void *my_malloc(struct uk_alloc *a, __sz size)
+{
+    struct my_allocator *ma = (struct my_allocator *)a;
+    // Implementation
+}
+
+static void my_free(struct uk_alloc *a, void *ptr)
+{
+    // Implementation
+}
+
+struct uk_alloc *my_allocator_init(void *base, size_t len)
+{
+    struct my_allocator *ma = (struct my_allocator *)base;
+    
+    ma->uk_alloc_if.malloc = my_malloc;
+    ma->uk_alloc_if.free = my_free;
+    // Set other function pointers
+    
+    return &ma->uk_alloc_if;
+}
+```
+
+## See Also
+
+- [ukvmem - Virtual Memory Management](/libraries/ukvmem)
+- [ukmmap - Memory Mapping](/libraries/ukmmap)
+- `lib/ukalloc/` - Base allocator implementation
+- `lib/ukallocbbuddy/` - Buddy allocator source
+- `lib/ukallocpool/` - Pool allocator source
+- `lib/ukallocregion/` - Region allocator source
+- `lib/ukallocstack/` - Stack allocator source

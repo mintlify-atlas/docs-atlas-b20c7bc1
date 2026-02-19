@@ -1,0 +1,364 @@
+---
+title: Coding Conventions
+description: Coding style and conventions for Unikraft development
+---
+
+Unikraft follows a consistent coding style based on the Linux Kernel coding conventions. This ensures code readability, maintainability, and consistency across the project.
+
+## Style Guidelines
+
+Unikraft's coding style is similar to the [Linux Kernel Coding Style](https://www.kernel.org/doc/Documentation/CodingStyle). The key principles include:
+
+### Indentation
+
+- **Use tabs for indentation**, not spaces
+- Tab width is **8 characters**
+- Indent width is **8 spaces**
+
+```c
+int uk_function(void)
+{
+	if (condition) {
+		do_something();
+		do_another_thing();
+	}
+}
+```
+
+### Line Length
+
+- **Maximum line length is 80 characters**
+- Break long lines at sensible boundaries
+- For git commit messages, the maximum line length is 75 characters
+
+### Braces
+
+- Use **Linux brace style**:
+  - Opening brace on the same line for functions and control structures
+  - Closing brace on its own line
+  - Exception: Function definitions have opening brace on new line
+
+```c
+// Function definition
+int uk_function(void)
+{
+	// Opening brace on new line
+}
+
+// Control structures
+if (condition) {
+	// Opening brace on same line
+	do_something();
+}
+```
+
+### Short Functions
+
+- Only **empty functions** can be on a single line
+- Do not put short if statements on a single line
+
+```c
+// Correct
+static inline void empty_function(void) {}
+
+// Incorrect
+if (x) return;
+
+// Correct
+if (x)
+	return;
+```
+
+### Switch Statements
+
+- Do not indent case labels
+- Indent case blocks normally
+
+```c
+switch (value) {
+case 0:
+	handle_zero();
+	break;
+case 1:
+	handle_one();
+	break;
+default:
+	handle_default();
+	break;
+}
+```
+
+### Goto Labels
+
+- Do not indent goto labels
+- Place them at the beginning of the line
+
+```c
+int function(void)
+{
+	if (error)
+		goto out_err;
+
+	return 0;
+
+out_err:
+	cleanup();
+	return -1;
+}
+```
+
+## Formatting Tools
+
+### ClangFormat Configuration
+
+Unikraft provides a `.clang-format` file for automatic code formatting. The configuration is based on LLVM style with Linux kernel adaptations:
+
+```yaml
+BasedOnStyle: LLVM
+IndentWidth: 8
+UseTab: Always
+AlignAfterOpenBracket: Align
+BreakBeforeBraces: Linux
+BreakBeforeBinaryOperators: None
+ColumnLimit: 80
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+IndentCaseLabels: false
+IndentGotoLabels: false
+RemoveBracesLLVM: true
+SortIncludes: false
+SpaceBeforeParens: ControlStatements
+TabWidth: 8
+```
+
+### EditorConfig
+
+The `.editorconfig` file ensures consistent settings across different editors:
+
+```ini
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 8
+indent_style = tab
+max_line_length = 80
+insert_final_newline = true
+trim_trailing_whitespace = true
+```
+
+### Using ClangFormat
+
+Format your code automatically with:
+
+```bash
+clang-format -i path/to/your/file.c
+```
+
+Or format all modified files:
+
+```bash
+git diff --name-only | grep '\.[ch]$' | xargs clang-format -i
+```
+
+## Code Quality Checks
+
+### Checkpatch Script
+
+Unikraft uses a modified version of the Linux kernel's `checkpatch.pl` script to enforce coding standards.
+
+#### Running Checkpatch
+
+Check a specific file:
+
+```bash
+./support/scripts/checkpatch.uk -f path/to/file.c
+```
+
+Check your commits:
+
+```bash
+# Check last commit
+./support/scripts/checkpatch.uk -g HEAD~1..HEAD
+
+# Check multiple commits
+./support/scripts/checkpatch.uk -g HEAD~3..HEAD
+```
+
+Check a patch file:
+
+```bash
+./support/scripts/checkpatch.uk your-patch.patch
+```
+
+#### Checkpatch Configuration
+
+The `.checkpatch.conf` file configures checkpatch behavior:
+
+```
+--show-types
+--strict
+--no-tree
+--ignore ASSIGN_IN_IF
+--ignore AVOID_BUG
+--ignore C99_COMMENT_TOLERANCE
+--ignore NEW_TYPEDEFS
+--ignore FILE_PATH_CHANGES
+--ignore OBSOLETE
+--ignore SYMBOLIC_PERMS
+--max-line-length=80
+```
+
+#### Common Issues
+
+Checkpatch will flag issues such as:
+
+- Line length exceeding 80 characters
+- Incorrect indentation (spaces instead of tabs)
+- Missing spaces around operators
+- Trailing whitespace
+- Missing blank lines
+- Improper brace placement
+
+### Must-Fix Issues
+
+Before submitting a pull request, you **must** fix all errors reported by checkpatch. Warnings should also be addressed unless there's a good reason not to.
+
+## Naming Conventions
+
+### Functions
+
+- Use lowercase with underscores: `uk_function_name()`
+- Prefix with library/component name: `uk_alloc_malloc()`
+- Use descriptive names that indicate purpose
+
+### Variables
+
+- Use lowercase with underscores: `variable_name`
+- Use meaningful names, avoid single letters except for:
+  - Loop counters: `i`, `j`, `k`
+  - Temporary variables in small scopes
+
+### Constants and Macros
+
+- Use uppercase with underscores: `MAX_BUFFER_SIZE`
+- Prefix with component name: `UK_ALLOC_DEFAULT_SIZE`
+
+### Types
+
+- Use lowercase with underscores
+- Suffix struct types with `_t` when appropriate
+- Example: `struct uk_alloc`, `uk_alloc_t`
+
+## Comments
+
+### Single-line Comments
+
+Both C++ and C style comments are acceptable:
+
+```c
+// This is a single-line comment
+/* This is also acceptable */
+```
+
+### Multi-line Comments
+
+Use C-style block comments:
+
+```c
+/*
+ * Multi-line comment with asterisks
+ * aligned on the left.
+ */
+```
+
+### Function Documentation
+
+Document functions with comments describing:
+- Purpose and behavior
+- Parameters
+- Return values
+- Any side effects or special considerations
+
+```c
+/**
+ * Allocates memory from the specified allocator
+ *
+ * @param a Pointer to the allocator
+ * @param size Number of bytes to allocate
+ * @return Pointer to allocated memory, or NULL on failure
+ */
+void *uk_malloc(struct uk_alloc *a, size_t size);
+```
+
+## File Organization
+
+### Header Files
+
+- Use include guards with format: `__COMPONENT_FILENAME_H__`
+- Group includes logically:
+  1. System headers
+  2. Unikraft internal headers
+  3. Component-specific headers
+
+```c
+#ifndef __UK_ALLOC_H__
+#define __UK_ALLOC_H__
+
+#include <stddef.h>
+#include <uk/essentials.h>
+#include <uk/config.h>
+
+/* ... */
+
+#endif /* __UK_ALLOC_H__ */
+```
+
+### Source Files
+
+- Include corresponding header first
+- Group includes logically
+- Separate sections with blank lines
+
+```c
+#include "uk/alloc.h"
+
+#include <string.h>
+#include <uk/print.h>
+#include <uk/assert.h>
+
+/* Implementation */
+```
+
+## Best Practices
+
+### Error Handling
+
+- Check return values of functions that can fail
+- Use negative errno values for error codes
+- Clean up resources properly on error paths
+
+### Memory Management
+
+- Always check if memory allocation succeeded
+- Free allocated memory when no longer needed
+- Avoid memory leaks
+
+### Portability
+
+- Use standard C types or Unikraft-provided types
+- Avoid platform-specific code when possible
+- Use conditional compilation for platform-specific code
+
+## Editor Setup
+
+Most modern editors support EditorConfig and ClangFormat:
+
+- **VS Code**: Install EditorConfig and Clang-Format extensions
+- **Vim**: Use `editorconfig-vim` and `vim-clang-format` plugins
+- **Emacs**: Install `editorconfig-emacs` and clang-format package
+
+## Resources
+
+- [Linux Kernel Coding Style](https://www.kernel.org/doc/html/latest/process/coding-style.html)
+- [EditorConfig Documentation](https://editorconfig.org/)
+- [ClangFormat Documentation](https://clang.llvm.org/docs/ClangFormat.html)

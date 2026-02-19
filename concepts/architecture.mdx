@@ -1,0 +1,448 @@
+---
+title: Unikraft Architecture
+description: Deep dive into Unikraft's internal architecture and design principles
+---
+
+## Architecture Overview
+
+Unikraft's architecture is built on three fundamental principles: **modularity**, **minimalism**, and **performance**. The system is organized into distinct layers, each responsible for specific functionality while maintaining clean interfaces between components.
+
+<Frame>
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Application                          │
+├─────────────────────────────────────────────────────────┤
+│              Library Ecosystem (80+ libs)               │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
+│  │  libc    │ │  sched   │ │  netdev  │ │   vfs    │  │
+│  │  posix   │ │  alloc   │ │  fs      │ │   ...    │  │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
+├─────────────────────────────────────────────────────────┤
+│           Platform Abstraction Layer (PAL)              │
+│     ┌──────────┐  ┌──────────┐  ┌──────────┐          │
+│     │   KVM    │  │   Xen    │  │  Common  │          │
+│     └──────────┘  └──────────┘  └──────────┘          │
+├─────────────────────────────────────────────────────────┤
+│              Architecture Support Layer                 │
+│        ┌──────────┐  ┌──────────┐  ┌──────────┐       │
+│        │  x86_64  │  │  ARM64   │  │  ARM32   │       │
+│        └──────────┘  └──────────┘  └──────────┘       │
+└─────────────────────────────────────────────────────────┘
+```
+</Frame>
+
+## Architectural Layers
+
+### 1. Architecture Support Layer
+
+The lowest layer provides architecture-specific implementations for:
+
+<CodeGroup>
+```c arch/x86/x86_64/
+// Low-level CPU operations
+// Context switching
+// Interrupt handling
+// Memory management primitives
+// Boot sequence
+```
+
+```c arch/arm/arm64/
+// ARM64-specific implementations
+// Exception handling
+// Memory barriers
+// Cache operations
+```
+</CodeGroup>
+
+**Supported Architectures** (from `arch/Config.uk:9-17`):
+
+<Tabs>
+  <Tab title="x86_64">
+    ```kconfig
+    config ARCH_X86_64
+        bool "x86 compatible (64 bits)"
+        select LIBISRLIB
+    ```
+    Full support for x86-64 with interrupt service routine library.
+  </Tab>
+  
+  <Tab title="ARM64">
+    ```kconfig
+    config ARCH_ARM_64
+        bool "Armv8 compatible (64 bits)"
+        select LIBISRLIB
+    ```
+    ARMv8 AArch64 support for modern ARM processors.
+  </Tab>
+  
+  <Tab title="ARM32">
+    ```kconfig
+    config ARCH_ARM_32
+        bool "Armv7 compatible (32 bits)"
+        select LIBISRLIB
+    ```
+    ARMv7 support for 32-bit ARM devices.
+  </Tab>
+</Tabs>
+
+<Note>
+Each architecture provides a consistent interface to higher layers, abstracting away hardware differences.
+</Note>
+
+### 2. Platform Abstraction Layer (PAL)
+
+The Platform Abstraction Layer provides a unified interface for different execution environments:
+
+#### Supported Platforms
+
+<CardGroup cols={3}>
+  <Card title="KVM" icon="computer">
+    Support for KVM/QEMU virtualization
+  </Card>
+  <Card title="Xen" icon="cloud">
+    Xen hypervisor integration
+  </Card>
+  <Card title="Common" icon="layer-group">
+    Shared platform code
+  </Card>
+</CardGroup>
+
+Platforms provide:
+- **Boot protocol** implementation
+- **Console** input/output
+- **Memory** discovery and management
+- **Interrupt** controller configuration
+- **Timer** services
+- **Device** discovery and initialization
+
+```c
+// Platform initialization interface
+struct ukplat_bootinfo {
+    void *dtb;                    /* Device tree blob */
+    struct ukplat_memregion_desc *mrds;
+    struct ukplat_memregion_list mrd_list;
+};
+```
+
+### 3. Library Ecosystem
+
+The heart of Unikraft is its rich ecosystem of **80+ internal libraries**. Each library is:
+
+- **Self-contained**: Has its own configuration and build rules
+- **Composable**: Can depend on other libraries
+- **Optional**: Include only what you need
+- **Configurable**: Fine-grained control via Kconfig
+
+#### Core Library Categories
+
+<AccordionGroup>
+  <Accordion title="Boot and Initialization" icon="power-off">
+    **ukboot** - Main bootstrapping library (lib/ukboot/Config.uk:1-6)
+    ```kconfig
+    menuconfig LIBUKBOOT
+        bool "ukboot: Unikraft bootstrapping"
+        select LIBNOLIBC if !HAVE_LIBC
+        select LIBUKDEBUG
+        select LIBUKARGPARSE
+        select HAVE_BOOTENTRY
+    ```
+    
+    Handles:
+    - Command-line parsing
+    - Memory allocator initialization
+    - Scheduler setup
+    - Main thread creation
+  </Accordion>
+  
+  <Accordion title="Memory Management" icon="memory">
+    Multiple allocator implementations:
+    
+    - **ukalloc** - Allocator API abstraction
+    - **ukallocbbuddy** - Binary buddy allocator (default)
+    - **ukallocregion** - Region allocator (no free support)
+    - **ukallocpool** - Pool allocator for fixed-size objects
+    - **ukallocstack** - Stack allocator
+    - **ukvmem** - Virtual memory management
+    - **ukmmap** - Memory mapping support
+    
+    <Tip>
+    You can choose different allocators at build time based on your application's needs.
+    </Tip>
+  </Accordion>
+  
+  <Accordion title="Scheduling" icon="clock">
+    **uksched** - Scheduler abstraction (lib/uksched/Config.uk:1-7)
+    ```kconfig
+    menuconfig LIBUKSCHED
+        bool "uksched: Abstraction for schedulers"
+        select LIBNOLIBC if !HAVE_LIBC
+        select LIBUKDEBUG
+        select LIBUKALLOC
+        select HAVE_SCHED
+    ```
+    
+    **ukschedcoop** - Cooperative scheduler implementation
+    
+    Features:
+    - Thread management
+    - Context switching
+    - Yield and sleep operations
+    - Thread statistics (optional)
+  </Accordion>
+  
+  <Accordion title="File Systems" icon="folder">
+    Multiple filesystem implementations:
+    
+    - **vfscore** - Virtual file system core
+    - **ramfs** - RAM-based file system
+    - **9pfs** - Plan 9 file system (for sharing with host)
+    - **devfs** - Device file system
+    - **ukfs-virtiofs** - VirtIO-FS support
+    
+    VFS provides POSIX-like file operations while supporting multiple backends.
+  </Accordion>
+  
+  <Accordion title="Networking" icon="network-wired">
+    - **uknetdev** - Network device abstraction
+    - **posix-socket** - POSIX socket API
+    - **posix-netlink** - Netlink socket support
+    
+    Can integrate with external network stacks like lwIP or musl.
+  </Accordion>
+  
+  <Accordion title="POSIX Compatibility" icon="terminal">
+    Extensive POSIX compatibility through modular libraries:
+    
+    - **posix-process** - Process management
+    - **posix-fd** - File descriptor handling
+    - **posix-fdtab** - File descriptor table
+    - **posix-pipe** - Pipe support
+    - **posix-socket** - Socket API
+    - **posix-user** - User/group management
+    - **posix-time** - Time functions
+    - **posix-mmap** - Memory mapping
+    - **posix-environ** - Environment variables
+    
+    Each can be independently enabled or disabled.
+  </Accordion>
+  
+  <Accordion title="Debugging and Utilities" icon="bug">
+    - **ukdebug** - Debug output and assertions
+    - **uktest** - Unit testing framework
+    - **ukgcov** - Code coverage support
+    - **ubsan** - Undefined behavior sanitizer
+    - **ukprint** - Printf implementations
+    - **ukargparse** - Argument parsing
+  </Accordion>
+</AccordionGroup>
+
+## Dependency Management
+
+Unikraft uses **Kconfig** for managing library dependencies. Libraries can:
+
+<Steps>
+  <Step title="Declare Dependencies">
+    Use `select` to automatically enable required libraries:
+    ```kconfig
+    config LIBUKSCHED
+        bool "uksched: Abstraction for schedulers"
+        select LIBUKALLOC  # Automatically enables allocator
+        select LIBUKDEBUG  # Automatically enables debug support
+    ```
+  </Step>
+  
+  <Step title="Suggest Optional Features">
+    Use `imply` for recommended but not required dependencies:
+    ```kconfig
+    config LIBUKBOOT
+        imply LIBUKBOOT_MAINTHREAD if HAVE_SHUTDOWN_DISPATCHER
+    ```
+  </Step>
+  
+  <Step title="Conditional Dependencies">
+    Use `depends on` to create conditional availability:
+    ```kconfig
+    config LIBUKBOOT_MAINTHREAD
+        depends on LIBUKBOOT_INITSCHED && LIBUKBOOT_INITALLOC
+    ```
+  </Step>
+</Steps>
+
+## Build System Integration
+
+Each library integrates with the build system through three key files:
+
+<CodeGroup>
+```makefile Config.uk
+# Kconfig options for library configuration
+menuconfig LIBMYLIB
+    bool "mylib: My custom library"
+    select LIBUKALLOC
+    
+if LIBMYLIB
+    config LIBMYLIB_FEATURE
+        bool "Enable feature X"
+endif
+```
+
+```makefile Makefile.uk
+# Build rules and source files
+$(eval $(call addlib,libmylib))
+
+LIBMYLIB_SRCS-y += $(LIBMYLIB_BASE)/src/main.c
+LIBMYLIB_SRCS-$(CONFIG_LIBMYLIB_FEATURE) += $(LIBMYLIB_BASE)/src/feature.c
+```
+
+```makefile exportsyms.uk
+# Exported symbols for dynamic linking
+mylib_init
+mylib_register
+mylib_do_work
+```
+</CodeGroup>
+
+## Library Registration
+
+All internal libraries are registered in `lib/Makefile.uk:7-86`:
+
+```makefile
+$(eval $(call import_lib,$(CONFIG_UK_BASE)/lib/ukboot))
+$(eval $(call import_lib,$(CONFIG_UK_BASE)/lib/ukalloc))
+$(eval $(call import_lib,$(CONFIG_UK_BASE)/lib/uksched))
+# ... 80+ more libraries
+```
+
+The `import_lib` macro:
+1. Includes the library's `Config.uk` for configuration
+2. Includes the library's `Makefile.uk` for build rules
+3. Registers the library with the build system
+
+## Memory Layout
+
+Unikraft organizes memory into well-defined regions:
+
+```
+┌────────────────────┐ High Memory
+│    Heap Region     │ (Dynamic allocations)
+├────────────────────┤
+│  Stack Region(s)   │ (Per-thread stacks)
+├────────────────────┤
+│   BSS Section      │ (Uninitialized data)
+├────────────────────┤
+│   Data Section     │ (Initialized data)
+├────────────────────┤
+│   Code Section     │ (Executable code)
+└────────────────────┘ Low Memory
+```
+
+<Note>
+Heap base address is configurable (Config.uk:139-143) and defaults to `0x400000000` on paging-enabled systems.
+</Note>
+
+## Boot Sequence
+
+The Unikraft boot sequence follows a well-defined flow:
+
+<Steps>
+  <Step title="Platform Entry">
+    Platform-specific entry point initializes:
+    - Console for early output
+    - Memory regions
+    - Basic CPU features
+  </Step>
+  
+  <Step title="Architecture Setup">
+    Architecture layer configures:
+    - Interrupt handlers
+    - Memory management (page tables)
+    - CPU-specific features
+  </Step>
+  
+  <Step title="Boot Library Initialization">
+    ukboot orchestrates:
+    - Allocator initialization
+    - Scheduler setup
+    - Main thread creation
+  </Step>
+  
+  <Step title="Library Constructors">
+    All libraries run their initialization routines in priority order.
+  </Step>
+  
+  <Step title="Application Entry">
+    Finally, the application's `main()` function is called.
+  </Step>
+</Steps>
+
+## Configuration System
+
+Unikraft uses Linux kernel's Kconfig system for configuration management:
+
+```bash
+# Interactive configuration
+make menuconfig
+
+# Architecture Selection → Choose x86_64/ARM64/ARM32
+# Platform Configuration → Choose KVM/Xen
+# Library Configuration → Select needed libraries
+# Build Options → Optimization, debug symbols, etc.
+```
+
+Configuration is stored in `.config` file and affects:
+- Which libraries are included
+- Compiler flags and optimizations
+- Feature availability
+- Platform-specific settings
+
+## Performance Considerations
+
+Unikraft's architecture enables multiple performance optimizations:
+
+<CardGroup cols={2}>
+  <Card title="Link-Time Optimization" icon="bolt">
+    Dead code elimination removes unused functions across library boundaries.
+  </Card>
+  
+  <Card title="Minimal Overhead" icon="gauge-high">
+    Direct function calls instead of system call overhead.
+  </Card>
+  
+  <Card title="Custom Allocators" icon="memory">
+    Choose allocator based on workload characteristics.
+  </Card>
+  
+  <Card title="Static Configuration" icon="lock">
+    Many decisions made at compile time instead of runtime.
+  </Card>
+</CardGroup>
+
+## Extension Points
+
+Unikraft provides clean extension mechanisms:
+
+1. **Constructor/Destructor Priorities**: Control initialization order
+2. **Registration APIs**: Dynamic registration of devices, filesystems, etc.
+3. **Hooks and Callbacks**: Inject custom behavior at specific points
+4. **Library APIs**: Well-defined interfaces between components
+
+```c
+// Example: Registering a filesystem
+UK_FS_REGISTER(my_fs, "myfs", &myfs_ops);
+
+// Example: Constructor with priority
+UK_CTOR_PRIO(my_init, UK_PRIO_EARLIEST)
+{
+    // Early initialization code
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Modular Design" icon="cubes" href="/concepts/modular-design">
+    Deep dive into the library system
+  </Card>
+  <Card title="Build System" icon="hammer" href="/concepts/build-system">
+    Master the Kconfig and Makefile system
+  </Card>
+</CardGroup>

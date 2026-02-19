@@ -1,0 +1,714 @@
+---
+title: POSIX Compatibility
+description: POSIX compatibility libraries providing standard Unix interfaces in Unikraft
+---
+
+## Overview
+
+Unikraft provides a comprehensive set of POSIX compatibility libraries that implement standard Unix/Linux interfaces. These modular libraries allow applications to use familiar POSIX APIs while maintaining Unikraft's principle of modularity - you only include what you need.
+
+Each POSIX library can be individually enabled or disabled, allowing fine-grained control over the functionality and size of your unikernel.
+
+## Architecture
+
+POSIX compatibility in Unikraft is implemented through a layered approach:
+
+```
+┌─────────────────────────────────────────┐
+│      Application Code                   │
+│   (Uses standard POSIX APIs)            │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│   POSIX Compatibility Libraries         │
+│   (posix-*)                             │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│   Syscall Shim Layer                    │
+│   (syscall_shim)                        │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│   Unikraft Internal APIs                │
+│   (vfscore, uknetdev, ukalloc, etc.)    │
+└─────────────────────────────────────────┘
+```
+
+## Available POSIX Libraries
+
+Unikraft provides 21 specialized POSIX compatibility libraries, each focused on a specific area of functionality:
+
+### Process and Thread Management
+
+#### posix-process
+
+Provides POSIX-compliant process implementation with three feature levels:
+
+**1. Single Thread Mode** (minimal)
+- Stubbed task identification for single-threaded applications
+- No scheduler dependency
+- Configuration: Enable `CONFIG_LIBPOSIX_PROCESS` only
+
+**2. Multithreading Mode**
+- True task identification and `clone()` support
+- Thread management via `pthread` APIs
+- Optional `execve()` support (requires VFS)
+- Optional POSIX signals
+- Configuration: Enable `CONFIG_LIBPOSIX_PROCESS` + `CONFIG_LIBPOSIX_PROCESS_MULTITHREADING`
+
+**3. Multiprocess Mode** (full-featured)
+- Complete multiprocess support with `vfork()`
+- Process hierarchy (parent/child relationships)
+- Full `execve()` support
+- Process synchronization (`wait4()`, `waitid()`)
+- Configuration: Enable `CONFIG_LIBPOSIX_PROCESS` + `CONFIG_LIBPOSIX_PROCESS_MULTIPROCESS`
+
+System call support comparison:
+
+| System Call        | Single Thread | Multithreading | Multiprocess |
+|--------------------|---------------|----------------|--------------|
+| `gettid()`         | Stubbed       | Yes            | Yes          |
+| `getpid()`         | Stubbed       | Yes            | Yes          |
+| `getppid()`        | Stubbed       | Yes            | Yes          |
+| `clone()`          | No (ENOSYS)   | Yes            | Yes          |
+| `vfork()`          | No (ENOSYS)   | No (ENOSYS)    | Yes          |
+| `execve()`         | No (ENOSYS)   | Optional       | Yes          |
+| `_exit()`          | Conditional   | Yes            | Yes          |
+| `wait4()`/`waitid()` | No (ECHILD) | No (ECHILD)    | Yes          |
+
+Example usage:
+```c
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    pid_t pid = vfork();
+    
+    if (pid == 0) {
+        // Child process
+        execve("/bin/app", argv, envp);
+        _exit(1);
+    } else {
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+    }
+    
+    return 0;
+}
+```
+
+<Warning>
+**Multiprocess Limitations**: Unikraft is a single-address-space OS and only implements `vfork()`, not traditional `fork()`. The child shares the parent's address space until it calls `execve()` or `_exit()`. Between `vfork()` and `execve()`, the child can only:
+1. Update the vfork() return value location
+2. Call `execve()`
+3. Call `_exit()`
+
+Any other operations result in undefined behavior.
+</Warning>
+
+#### posix-futex
+
+Fast userspace mutex implementation for thread synchronization:
+
+```c
+#include <linux/futex.h>
+#include <sys/syscall.h>
+
+int futex_wait(int *addr, int val) {
+    return syscall(SYS_futex, addr, FUTEX_WAIT, val, NULL, NULL, 0);
+}
+
+int futex_wake(int *addr, int n) {
+    return syscall(SYS_futex, addr, FUTEX_WAKE, n, NULL, NULL, 0);
+}
+```
+
+Provides: `futex()` system call
+
+### Environment and User Management
+
+#### posix-environ
+
+Environment variable management:
+
+```c
+#include <stdlib.h>
+
+int main() {
+    // Get environment variable
+    const char *path = getenv("PATH");
+    
+    // Set environment variable
+    setenv("MY_VAR", "value", 1);
+    
+    // Unset environment variable
+    unsetenv("MY_VAR");
+    
+    // Clear all environment variables
+    clearenv();
+    
+    return 0;
+}
+```
+
+Provides: `getenv()`, `setenv()`, `unsetenv()`, `clearenv()`, `putenv()`
+
+Environment variables can be compiled into the image:
+1. Run `make menuconfig`
+2. Navigate to `Library Configuration` → `posix-environ`
+3. Select `Compiled-in environment variables`
+4. Add entries like `PATH=/bin:/usr/bin`
+
+#### posix-user
+
+User and group information management:
+
+```c
+#include <pwd.h>
+#include <grp.h>
+
+// Get user information
+struct passwd *pw = getpwuid(getuid());
+printf("Username: %s\n", pw->pw_name);
+
+// Get group information
+struct group *gr = getgrgid(getgid());
+printf("Group: %s\n", gr->gr_name);
+
+// User ID operations
+uid_t uid = getuid();
+gid_t gid = getgid();
+setuid(1000);
+setgid(1000);
+```
+
+Provides: `getuid()`, `setuid()`, `getpwuid()`, `getgrgid()`, and related functions
+
+### File and I/O Management
+
+#### posix-vfs
+
+Virtual filesystem syscall implementation:
+
+```c
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+int fd = open("/file.txt", O_RDWR | O_CREAT, 0644);
+if (fd < 0) {
+    perror("open");
+    return 1;
+}
+
+char buf[100];
+ssize_t n = read(fd, buf, sizeof(buf));
+write(fd, "data", 4);
+
+struct stat st;
+fstat(fd, &st);
+printf("File size: %ld\n", st.st_size);
+
+close(fd);
+unlink("/file.txt");
+```
+
+Provides: `open()`, `close()`, `read()`, `write()`, `stat()`, `mkdir()`, `unlink()`, `rename()`, and all standard filesystem syscalls
+
+Requires: `CONFIG_LIBVFSCORE` for the underlying VFS implementation
+
+#### posix-vfs-fstab
+
+Filesystem table management for mounting filesystems at boot:
+
+```c
+// Filesystems configured in menuconfig are automatically mounted
+// Configuration: Library Configuration → posix-vfs-fstab
+```
+
+Configuration in menuconfig:
+1. `Library Configuration` → `posix-vfs-fstab`
+2. Add mount entries specifying device, mountpoint, filesystem type, and options
+
+#### posix-fdtab
+
+File descriptor table management (internal library used by posix-fdio and posix-vfs):
+
+Provides the infrastructure for mapping file descriptor integers to file objects.
+
+#### posix-fd
+
+POSIX file descriptor abstraction layer (internal):
+
+Provides the abstract file descriptor interface used by higher-level I/O libraries.
+
+#### posix-fdio
+
+File descriptor I/O operations:
+
+```c
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/sendfile.h>
+
+// Duplicate file descriptors
+int newfd = dup(oldfd);
+int fd2 = dup2(oldfd, newfd);
+
+// File control
+int flags = fcntl(fd, F_GETFL);
+fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+// File status
+struct stat st;
+fstat(fd, &st);
+
+// Efficient file copy
+sendfile(out_fd, in_fd, NULL, count);
+```
+
+Provides: `dup()`, `dup2()`, `fcntl()`, `ioctl()`, `fstat()`, `sendfile()`
+
+#### posix-mmap
+
+Memory-mapped file I/O:
+
+```c
+#include <sys/mman.h>
+
+int fd = open("/file.dat", O_RDWR);
+size_t size = 4096;
+
+// Map file into memory
+void *addr = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                  MAP_SHARED, fd, 0);
+if (addr == MAP_FAILED) {
+    perror("mmap");
+    return 1;
+}
+
+// Access file through memory
+char *data = (char *)addr;
+data[0] = 'A';
+
+// Sync changes to disk
+msync(addr, size, MS_SYNC);
+
+// Unmap
+munmap(addr, size);
+close(fd);
+```
+
+Provides: `mmap()`, `munmap()`, `msync()`, `mprotect()`, `brk()`, `sbrk()`
+
+### Networking
+
+#### posix-socket
+
+Network socket API:
+
+```c
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+// Create TCP socket
+int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+// Server: bind and listen
+struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+    .sin_port = htons(8080),
+    .sin_addr.s_addr = INADDR_ANY
+};
+bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+listen(sockfd, 10);
+
+int client = accept(sockfd, NULL, NULL);
+
+// Client: connect
+connect(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+
+// I/O
+send(sockfd, "Hello", 5, 0);
+recv(sockfd, buffer, sizeof(buffer), 0);
+
+// Socket options
+int opt = 1;
+setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+close(sockfd);
+```
+
+Provides: `socket()`, `bind()`, `listen()`, `accept()`, `connect()`, `send()`, `recv()`, `setsockopt()`, `getsockopt()`, `shutdown()`
+
+Requires: Network driver and `uknetdev` library
+
+#### posix-unixsocket
+
+Unix domain socket support for local IPC:
+
+```c
+#include <sys/socket.h>
+#include <sys/un.h>
+
+int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+struct sockaddr_un addr = {
+    .sun_family = AF_UNIX
+};
+strncpy(addr.sun_path, "/tmp/socket", sizeof(addr.sun_path) - 1);
+
+// Server side
+bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+listen(sockfd, 5);
+
+// Client side
+connect(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+```
+
+Provides: Unix domain socket support (AF_UNIX)
+
+#### posix-netlink
+
+Netlink socket support for kernel-userspace communication:
+
+```c
+#include <linux/netlink.h>
+
+int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+struct sockaddr_nl addr = {
+    .nl_family = AF_NETLINK,
+    .nl_pid = getpid(),
+    .nl_groups = 0
+};
+
+bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+```
+
+Provides: Netlink socket support (AF_NETLINK)
+
+### I/O Multiplexing
+
+#### posix-poll
+
+I/O event notification mechanisms:
+
+```c
+#include <poll.h>
+#include <sys/select.h>
+#include <sys/epoll.h>
+
+// poll() - portable
+struct pollfd fds[2];
+fds[0].fd = fd1;
+fds[0].events = POLLIN;
+fds[1].fd = fd2;
+fds[1].events = POLLIN;
+
+int ret = poll(fds, 2, 1000);  // 1 second timeout
+
+// select() - traditional
+fd_set readfds;
+FD_ZERO(&readfds);
+FD_SET(fd, &readfds);
+
+struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+select(fd + 1, &readfds, NULL, NULL, &tv);
+
+// epoll() - Linux-specific, high performance
+int epfd = epoll_create1(0);
+
+struct epoll_event ev = {
+    .events = EPOLLIN | EPOLLET,
+    .data.fd = fd
+};
+epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+
+struct epoll_event events[10];
+int n = epoll_wait(epfd, events, 10, 1000);
+```
+
+Provides: `poll()`, `select()`, `epoll_create()`, `epoll_ctl()`, `epoll_wait()`
+
+### IPC and Synchronization
+
+#### posix-pipe
+
+Pipe-based IPC:
+
+```c
+#include <unistd.h>
+
+int pipefd[2];
+pipe(pipefd);  // or pipe2(pipefd, O_NONBLOCK | O_CLOEXEC)
+
+pid_t pid = fork();
+if (pid == 0) {
+    // Child: write to pipe
+    close(pipefd[0]);
+    write(pipefd[1], "Hello", 5);
+    close(pipefd[1]);
+} else {
+    // Parent: read from pipe
+    close(pipefd[1]);
+    char buf[10];
+    read(pipefd[0], buf, sizeof(buf));
+    close(pipefd[0]);
+}
+```
+
+Provides: `pipe()`, `pipe2()`
+
+#### posix-eventfd
+
+Event notification file descriptor:
+
+```c
+#include <sys/eventfd.h>
+
+int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+
+// Write event
+uint64_t value = 1;
+write(efd, &value, sizeof(value));
+
+// Read event
+uint64_t result;
+read(efd, &result, sizeof(result));
+
+close(efd);
+```
+
+Provides: `eventfd()`, `eventfd_read()`, `eventfd_write()`
+
+Useful for thread signaling and event notification.
+
+#### posix-timerfd
+
+Timer notification via file descriptors:
+
+```c
+#include <sys/timerfd.h>
+#include <time.h>
+
+int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+
+// Set timer to fire after 1 second, then every 500ms
+struct itimerspec its = {
+    .it_value = {.tv_sec = 1, .tv_nsec = 0},
+    .it_interval = {.tv_sec = 0, .tv_nsec = 500000000}
+};
+timerfd_settime(tfd, 0, &its, NULL);
+
+// Wait for timer
+uint64_t expirations;
+read(tfd, &expirations, sizeof(expirations));
+
+close(tfd);
+```
+
+Provides: `timerfd_create()`, `timerfd_settime()`, `timerfd_gettime()`
+
+### Time Management
+
+#### posix-time
+
+Time and clock operations:
+
+```c
+#include <time.h>
+#include <sys/time.h>
+
+// Get current time
+time_t now = time(NULL);
+
+struct timespec ts;
+clock_gettime(CLOCK_REALTIME, &ts);
+clock_gettime(CLOCK_MONOTONIC, &ts);
+
+// Sleep
+sleep(1);                    // 1 second
+usleep(500000);              // 500ms
+nanosleep(&ts, NULL);
+
+// Set time
+struct timespec new_time;
+clock_settime(CLOCK_REALTIME, &new_time);
+
+// Timers
+timer_t timerid;
+struct sigevent sev = {.sigev_notify = SIGEV_SIGNAL};
+timer_create(CLOCK_REALTIME, &sev, &timerid);
+
+struct itimerspec its;
+timer_settime(timerid, 0, &its, NULL);
+```
+
+Provides: `time()`, `clock_gettime()`, `clock_settime()`, `nanosleep()`, `timer_create()`, `timer_settime()`
+
+### System Information
+
+#### posix-sysinfo
+
+System information queries:
+
+```c
+#include <sys/sysinfo.h>
+#include <sys/utsname.h>
+
+// Get system information
+struct sysinfo info;
+sysinfo(&info);
+printf("Uptime: %ld seconds\n", info.uptime);
+printf("Total RAM: %lu bytes\n", info.totalram);
+
+// Get system name/version
+struct utsname uts;
+uname(&uts);
+printf("System: %s\n", uts.sysname);
+printf("Release: %s\n", uts.release);
+printf("Machine: %s\n", uts.machine);
+```
+
+Provides: `sysinfo()`, `uname()`
+
+### Terminal Management
+
+#### posix-tty
+
+TTY and serial console management:
+
+```c
+#include <termios.h>
+
+int fd = open("/dev/ttyS0", O_RDWR);
+
+// Get terminal attributes
+struct termios tio;
+tcgetattr(fd, &tio);
+
+// Configure terminal (e.g., raw mode)
+tio.c_lflag &= ~(ICANON | ECHO);
+tcsetattr(fd, TCSANOW, &tio);
+
+// Check if fd is a TTY
+if (isatty(fd)) {
+    printf("File descriptor is a TTY\n");
+}
+```
+
+Provides: `tcgetattr()`, `tcsetattr()`, `isatty()`, TTY device support
+
+### Dynamic Linking
+
+#### posix-libdl
+
+Dynamic linking support (stubs):
+
+```c
+#include <dlfcn.h>
+
+// Load shared library
+void *handle = dlopen("libexample.so", RTLD_LAZY);
+
+// Get symbol
+void (*func)(void) = dlsym(handle, "function_name");
+func();
+
+// Close library
+dlclose(handle);
+```
+
+Provides: `dlopen()`, `dlsym()`, `dlclose()`, `dlerror()` (stub implementations)
+
+<Warning>
+**Limited Dynamic Linking**: `posix-libdl` currently provides stub implementations. Full dynamic linking support requires additional components like `libelfloader` and proper ELF handling. For most unikernel deployments, static linking is preferred.
+</Warning>
+
+## Configuration Strategy
+
+### Minimal Configuration
+
+For a minimal unikernel with basic I/O:
+
+```
+CONFIG_LIBNOLIBC=y
+CONFIG_LIBSYSCALL_SHIM=y
+CONFIG_LIBPOSIX_FDIO=y
+```
+
+### Network Application
+
+For a network server:
+
+```
+CONFIG_LIBNOLIBC=y
+CONFIG_LIBSYSCALL_SHIM=y
+CONFIG_LIBPOSIX_SOCKET=y
+CONFIG_LIBPOSIX_POLL=y
+CONFIG_LIBPOSIX_TIME=y
+CONFIG_LIBPOSIX_ENVIRON=y
+```
+
+### Full POSIX Application
+
+For maximum compatibility:
+
+```
+CONFIG_LIBMUSL=y
+CONFIG_LIBSYSCALL_SHIM=y
+CONFIG_LIBPOSIX_PROCESS=y
+CONFIG_LIBPOSIX_PROCESS_MULTIPROCESS=y
+CONFIG_LIBPOSIX_VFS=y
+CONFIG_LIBPOSIX_SOCKET=y
+CONFIG_LIBPOSIX_POLL=y
+CONFIG_LIBPOSIX_TIME=y
+CONFIG_LIBPOSIX_ENVIRON=y
+CONFIG_LIBPOSIX_USER=y
+```
+
+## Dependency Graph
+
+Key library dependencies:
+
+```
+posix-process (multiprocess)
+    └─ posix-vfs (for execve)
+        ├─ vfscore
+        └─ posix-fdtab
+
+posix-socket
+    ├─ uknetdev
+    └─ posix-fd
+
+posix-vfs
+    ├─ vfscore
+    └─ posix-fdio
+        └─ posix-fdtab
+            └─ posix-fd
+
+posix-poll
+    └─ posix-fd
+```
+
+## Best Practices
+
+1. **Start Minimal**: Begin with only the POSIX libraries your application needs
+2. **Use Configuration Tools**: Use `make menuconfig` to discover dependencies automatically
+3. **Check Runtime Errors**: System calls from disabled libraries return `-ENOSYS`
+4. **Profile Size**: Run `ls -lh build/*.dbg` to see component sizes
+5. **Test Incrementally**: Add POSIX libraries one at a time to isolate issues
+
+## See Also
+
+- [nolibc](/libraries/nolibc) - Lightweight C library
+- [syscall-shim](/libraries/syscall-shim) - System call interception layer
+- [musl](https://github.com/unikraft/lib-musl) - Full C library with complete POSIX support
+- [vfscore](https://github.com/unikraft/unikraft/tree/staging/lib/vfscore) - Virtual filesystem core

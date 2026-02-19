@@ -1,0 +1,560 @@
+---
+title: ukalloc - Memory Allocation
+description: Memory allocator abstraction layer providing malloc-style and page allocation interfaces
+---
+
+The `ukalloc` library provides an abstraction layer for memory allocation in Unikraft. It defines a common interface that multiple allocator implementations can conform to, enabling flexible memory management strategies.
+
+## Overview
+
+`ukalloc` provides:
+- **Malloc-style allocation** - Standard `malloc()`, `calloc()`, `realloc()`, `free()`
+- **Aligned allocation** - `memalign()` and `posix_memalign()`
+- **Page allocation** - Raw page-level allocation and deallocation
+- **Multiple allocators** - Support for multiple concurrent allocators
+- **Statistics tracking** - Optional per-allocator and global statistics
+- **Allocator registration** - Dynamic allocator registration system
+
+## Core Data Structure
+
+```c
+struct uk_alloc {
+    uk_alloc_malloc_func_t malloc;
+    uk_alloc_calloc_func_t calloc;
+    uk_alloc_realloc_func_t realloc;
+    uk_alloc_posix_memalign_func_t posix_memalign;
+    uk_alloc_memalign_func_t memalign;
+    uk_alloc_free_func_t free;
+    
+    uk_alloc_palloc_func_t palloc;
+    uk_alloc_pfree_func_t pfree;
+    
+    uk_alloc_getsize_func_t maxalloc;
+    uk_alloc_getsize_func_t availmem;
+    uk_alloc_getpsize_func_t pmaxalloc;
+    uk_alloc_getpsize_func_t pavailmem;
+    
+    uk_alloc_addmem_func_t addmem;
+};
+```
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:91`
+
+## Object Allocation APIs
+
+### Malloc
+
+```c
+void *uk_malloc(struct uk_alloc *a, __sz size);
+```
+
+Allocate an object of `size` bytes.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  Number of bytes to allocate
+</ParamField>
+
+**Returns**:
+- Non-NULL pointer on success
+- NULL on failure (sets `errno = ENOMEM`)
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:159`
+
+---
+
+### Calloc
+
+```c
+void *uk_calloc(struct uk_alloc *a, __sz nmemb, __sz size);
+```
+
+Allocate an array of `nmemb` elements each of `size` bytes and zero the memory.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="nmemb" type="__sz">
+  Number of items in array
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  Size of each item in bytes
+</ParamField>
+
+**Returns**:
+- Non-NULL pointer on success
+- NULL on failure (sets `errno = ENOMEM`)
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:186`
+
+---
+
+### Realloc
+
+```c
+void *uk_realloc(struct uk_alloc *a, void *ptr, __sz size);
+```
+
+Resize the allocation at `ptr` to `size` bytes while preserving contents. May copy data to satisfy the request. The value of `ptr` should no longer be used after successful completion.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="ptr" type="void *">
+  Existing allocation (may be NULL for new allocation)
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  New size of allocation in bytes
+</ParamField>
+
+**Returns**:
+- Non-NULL pointer to resized allocation on success
+- NULL on failure
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:222`
+
+---
+
+### Free
+
+```c
+void uk_free(struct uk_alloc *a, void *ptr);
+```
+
+Free the object allocation at `ptr`. If `ptr` is NULL, do nothing. `ptr` must have been obtained from a malloc-like function of the same allocator.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="ptr" type="void *">
+  Pointer to object to free
+</ParamField>
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:304`
+
+## Aligned Allocation APIs
+
+### Memalign
+
+```c
+void *uk_memalign(struct uk_alloc *a, __sz align, __sz size);
+```
+
+Allocate an object of `size` bytes at an address that is a multiple of `align`.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="align" type="__sz">
+  Requested allocation alignment (must be power of 2)
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  Number of bytes to allocate
+</ParamField>
+
+**Returns**:
+- Non-NULL pointer on success
+- NULL on failure
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:280`
+
+---
+
+### POSIX Memalign
+
+```c
+int uk_posix_memalign(struct uk_alloc *a, void **memptr, 
+                      __sz align, __sz size);
+```
+
+Allocate an object of `size` bytes at an address multiple of `align` and place the result in `*memptr`.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="memptr" type="void **">
+  Output pointer (set to NULL on failure)
+</ParamField>
+
+<ParamField path="align" type="__sz">
+  Requested allocation alignment
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  Number of bytes to allocate
+</ParamField>
+
+**Returns**:
+- `0` on success
+- Positive error code on failure (e.g., `ENOMEM`)
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:251`
+
+## Page Allocation APIs
+
+### Palloc
+
+```c
+void *uk_palloc(struct uk_alloc *a, unsigned long num_pages);
+```
+
+Allocate `num_pages` raw contiguous pages of memory.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="num_pages" type="unsigned long">
+  Number of pages to allocate
+</ParamField>
+
+**Returns**:
+- Non-NULL pointer to first allocated page on success
+- NULL on failure
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:325`
+
+---
+
+### Pfree
+
+```c
+void uk_pfree(struct uk_alloc *a, void *ptr, unsigned long num_pages);
+```
+
+Free `num_pages` previously allocated pages starting at `ptr`.
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to use
+</ParamField>
+
+<ParamField path="ptr" type="void *">
+  Start of region to free (must be page-aligned)
+</ParamField>
+
+<ParamField path="num_pages" type="unsigned long">
+  Number of pages to free (must be non-zero)
+</ParamField>
+
+**Note**: Pages obtained in a single `palloc` call may be freed through any combination of `pfree` calls, as long as each page is freed exactly once.
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:353`
+
+## Allocator Management
+
+### Get Default Allocator
+
+```c
+struct uk_alloc *uk_alloc_get_default(void);
+```
+
+Get the default allocator for the current library. When per-library statistics are enabled, this returns a per-library wrapper around the default allocator.
+
+**Returns**: Pointer to the default allocator
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:134-139`
+
+---
+
+### Iterate Over Allocators
+
+```c
+#define uk_alloc_foreach(iter)
+```
+
+Iterate over all registered allocators.
+
+**Example**:
+```c
+struct uk_alloc *a;
+
+uk_alloc_foreach(a) {
+    uk_pr_info("Allocator: %p\n", a);
+}
+```
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:128`
+
+---
+
+### Add Memory to Allocator
+
+```c
+int uk_alloc_addmem(struct uk_alloc *a, void *base, __sz size);
+```
+
+Add a memory region to an allocator (if supported).
+
+<ParamField path="a" type="struct uk_alloc *">
+  Allocator to add memory to
+</ParamField>
+
+<ParamField path="base" type="void *">
+  Base address of memory region
+</ParamField>
+
+<ParamField path="size" type="__sz">
+  Size of memory region in bytes
+</ParamField>
+
+**Returns**:
+- `0` on success
+- `-ENOTSUP` if allocator doesn't support adding memory
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:359`
+
+## Statistics APIs
+
+When `CONFIG_LIBUKALLOC_IFSTATS` is enabled:
+
+### Statistics Structure
+
+```c
+struct uk_alloc_stats {
+    __sz last_alloc_size;  /* Size of last allocation */
+    __sz max_alloc_size;   /* Biggest satisfied allocation */
+    __sz min_alloc_size;   /* Smallest satisfied allocation */
+    
+    __u64 tot_nb_allocs;   /* Total number of allocations */
+    __u64 tot_nb_frees;    /* Total number of frees */
+    __s64 cur_nb_allocs;   /* Current active allocations */
+    __s64 max_nb_allocs;   /* Maximum active allocations */
+    
+    __ssz cur_mem_use;     /* Current memory in use */
+    __ssz max_mem_use;     /* Maximum memory used */
+    
+    __u64 nb_enomem;       /* Number of failed allocations */
+};
+```
+
+**Location**: `lib/ukalloc/include/uk/alloc.h:74`
+
+---
+
+### Get Statistics
+
+```c
+void uk_alloc_stats_get(struct uk_alloc *a, 
+                        struct uk_alloc_stats *dst);
+```
+
+Retrieve statistics for an allocator.
+
+---
+
+### Global Statistics
+
+When `CONFIG_LIBUKALLOC_IFSTATS_GLOBAL` is enabled:
+
+```c
+void uk_alloc_stats_get_global(struct uk_alloc_stats *dst);
+```
+
+Get consolidated global statistics across all allocators.
+
+## Configuration Options
+
+### Statistics Interface
+
+```kconfig
+config LIBUKALLOC_IFSTATS
+    bool "Allocator statistics interface"
+    default n
+```
+
+Enable statistics tracking for allocators.
+
+```kconfig
+config LIBUKALLOC_IFSTATS_GLOBAL
+    bool "Global statistics"
+    default n
+    depends on LIBUKALLOC_IFSTATS
+```
+
+Compute consolidated global allocator statistics. Note: May impact performance due to contention on global counters.
+
+```kconfig
+config LIBUKALLOC_IFSTATS_PERLIB
+    bool "Per-library statistics"
+    default n
+    depends on LIBUKALLOC_IFSTATS
+```
+
+Compute per-library statistics by returning library-specific wrappers from `uk_alloc_get_default()`.
+
+### Malloc Compatibility
+
+```kconfig
+config LIBUKALLOC_IFMALLOC
+    bool "Malloc compatibility interface"
+    default n
+```
+
+Provide helpers for allocators that only implement `malloc()` and `free()`.
+
+## Usage Examples
+
+### Basic Allocation
+
+```c
+#include <uk/alloc.h>
+
+void example_basic_alloc(void)
+{
+    struct uk_alloc *a = uk_alloc_get_default();
+    void *ptr;
+    
+    /* Allocate 1024 bytes */
+    ptr = uk_malloc(a, 1024);
+    if (!ptr) {
+        uk_pr_err("Allocation failed\n");
+        return;
+    }
+    
+    /* Use the memory */
+    memset(ptr, 0, 1024);
+    
+    /* Free the memory */
+    uk_free(a, ptr);
+}
+```
+
+### Aligned Allocation
+
+```c
+#include <uk/alloc.h>
+
+void example_aligned_alloc(void)
+{
+    struct uk_alloc *a = uk_alloc_get_default();
+    void *ptr;
+    int ret;
+    
+    /* Allocate 4096 bytes aligned to 4096-byte boundary */
+    ret = uk_posix_memalign(a, &ptr, 4096, 4096);
+    if (ret != 0) {
+        uk_pr_err("Aligned allocation failed: %d\n", ret);
+        return;
+    }
+    
+    /* ptr is guaranteed to be 4096-byte aligned */
+    UK_ASSERT(((uintptr_t)ptr & 4095) == 0);
+    
+    uk_free(a, ptr);
+}
+```
+
+### Page Allocation
+
+```c
+#include <uk/alloc.h>
+
+void example_page_alloc(void)
+{
+    struct uk_alloc *a = uk_alloc_get_default();
+    void *pages;
+    
+    /* Allocate 4 contiguous pages */
+    pages = uk_palloc(a, 4);
+    if (!pages) {
+        uk_pr_err("Page allocation failed\n");
+        return;
+    }
+    
+    /* Use the pages */
+    memset(pages, 0, 4 * PAGE_SIZE);
+    
+    /* Free the pages */
+    uk_pfree(a, pages, 4);
+}
+```
+
+### Statistics Tracking
+
+```c
+#include <uk/alloc.h>
+
+void example_statistics(void)
+{
+    struct uk_alloc *a = uk_alloc_get_default();
+    struct uk_alloc_stats stats;
+    void *ptr;
+    
+    /* Perform some allocations */
+    ptr = uk_malloc(a, 100);
+    uk_free(a, ptr);
+    
+    ptr = uk_malloc(a, 200);
+    uk_free(a, ptr);
+    
+    /* Get statistics */
+    uk_alloc_stats_get(a, &stats);
+    
+    uk_pr_info("Total allocations: %lu\n", stats.tot_nb_allocs);
+    uk_pr_info("Total frees: %lu\n", stats.tot_nb_frees);
+    uk_pr_info("Current allocations: %ld\n", stats.cur_nb_allocs);
+    uk_pr_info("Max allocation size: %lu\n", stats.max_alloc_size);
+    uk_pr_info("Failed allocations: %lu\n", stats.nb_enomem);
+}
+```
+
+## Implementing a Custom Allocator
+
+To implement a custom allocator, use the initialization macros from `uk/alloc_impl.h`:
+
+```c
+#include <uk/alloc.h>
+#include <uk/alloc_impl.h>
+
+/* Implement required functions */
+static void *my_malloc(struct uk_alloc *a, __sz size)
+{
+    /* Your implementation */
+}
+
+static void my_free(struct uk_alloc *a, void *ptr)
+{
+    /* Your implementation */
+}
+
+/* Initialize and register */
+void my_allocator_init(void)
+{
+    struct uk_alloc *a;
+    
+    a = /* allocate uk_alloc structure */;
+    
+    uk_alloc_init_malloc(a, my_malloc, NULL, NULL, my_free,
+                        NULL, NULL, NULL, NULL, NULL);
+}
+```
+
+## Dependencies
+
+`ukalloc` depends on:
+- `LIBNOLIBC` or `HAVE_LIBC` - For basic types
+- `LIBUKDEBUG` - For assertions and debugging
+
+## Available Allocator Implementations
+
+- **ukallocbbuddy** - Binary buddy allocator (general purpose, good for various sizes)
+- **ukallocregion** - Region allocator (fast, no free support)
+- **ukallocpool** - Pool allocator (fixed-size objects)
+- **ukallocstack** - Stack allocator (stack memory management)
+
+## See Also
+
+- [ukboot - Boot and Initialization](/libraries/ukboot)
+- [ukvmem - Virtual Memory](/libraries/overview)
+- [ukdebug - Debugging](/libraries/ukdebug)

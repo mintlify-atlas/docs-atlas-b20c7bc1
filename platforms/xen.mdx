@@ -1,0 +1,907 @@
+---
+title: "Xen Platform"
+description: "Complete guide to Xen paravirtualization support in Unikraft"
+---
+
+## Overview
+
+The Xen platform enables Unikraft to run as a guest domain on the Xen hypervisor. Xen provides both paravirtualization (PV) and hardware-assisted virtualization (PVH/HVM) modes, offering efficient isolation and resource management for unikernels.
+
+<Info>
+**Platform location**: `plat/xen/`
+
+**Supported architectures**: x86_64, x86_32, ARM64, ARM32
+
+**Xen interface version**: 0x00030205
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Virtualization Modes" icon="layer-group">
+    - PV (Paravirtualized)
+    - PVH (Paravirtualized on HVM)
+    - ARM native virtualization
+  </Card>
+  
+  <Card title="Communication" icon="arrows-left-right">
+    - Event channels
+    - Grant tables (shared memory)
+    - XenBus device discovery
+    - XenStore configuration
+  </Card>
+  
+  <Card title="Device Drivers" icon="plug">
+    - Netfront (paravirt network)
+    - Blkfront (paravirt block)
+    - 9Pfront (filesystem)
+    - XenConsole (console)
+  </Card>
+  
+  <Card title="Memory Management" icon="memory">
+    - Physical-to-machine mapping
+    - Balloon driver
+    - Grant table sharing
+    - Memory ballooning
+  </Card>
+</CardGroup>
+
+## Virtualization Modes
+
+### PV (Paravirtualized) Mode
+
+Traditional Xen paravirtualization where the guest kernel is aware of the hypervisor:
+
+**Characteristics**:
+- Direct hypercalls to Xen
+- Modified page tables
+- Efficient for lightweight workloads
+- Supported on all Xen versions
+
+**Configuration**:
+```makefile
+CONFIG_PLAT_XEN=y
+CONFIG_XEN_PV=y                    # Automatically enabled for x86
+CONFIG_XEN_PV_BUILD_P2M=y         # Build physical-to-machine table
+```
+
+### PVH (Paravirtualized on HVM) Mode
+
+Modern paravirtualization using hardware virtualization extensions:
+
+**Characteristics**:
+- Uses hardware-assisted virtualization (VT-x/AMD-V)
+- Native page tables
+- Better performance on modern hardware
+- Default for ARM platforms
+
+**Configuration**:
+```makefile
+CONFIG_PLAT_XEN=y
+CONFIG_XEN_HVMLITE=y              # PVH mode (ARM default)
+```
+
+## Configuration
+
+### Basic Xen Guest
+
+<Tabs>
+  <Tab title="Using kraft">
+    ```bash
+    # Configure project
+    kraft menu config
+    
+    # Navigate to: Platform Configuration
+    # Select: [*] Xen guest image
+    ```
+  </Tab>
+  
+  <Tab title="Config.uk">
+    ```makefile
+    CONFIG_PLAT_XEN=y
+    
+    # Architecture-specific
+    CONFIG_ARCH_X86_64=y              # or ARM_64, ARM_32, X86_32
+    
+    # Device drivers
+    CONFIG_LIBNETFRONT=y              # Network
+    CONFIG_LIBBLKFRONT=y              # Block storage
+    CONFIG_LIB9PFRONT=y               # 9P filesystem
+    CONFIG_LIBXENCONS=y               # Console
+    ```
+  </Tab>
+  
+  <Tab title="Domain Config">
+    Create Xen domain configuration file `app.xl`:
+    ```python
+    # Basic PV domain configuration
+    type = "pv"
+    name = "unikraft-app"
+    kernel = "build/app_xen-x86_64"
+    memory = 128
+    vcpus = 1
+    
+    # Networking
+    vif = [ 'bridge=xenbr0' ]
+    
+    # Block devices
+    disk = [ 'format=raw, vdev=xvda, access=rw, target=/path/to/disk.img' ]
+    
+    # Console
+    extra = "console=hvc0"
+    ```
+  </Tab>
+</Tabs>
+
+### Platform-Specific Options
+
+```makefile
+# Physical-to-machine table (x86_64 PV only)
+CONFIG_XEN_PV_BUILD_P2M=y
+
+# Xen interface version (automatically set)
+__XEN_INTERFACE_VERSION__=0x00030205
+
+# Multiprocessor support
+# Note: Currently disabled for Xen
+CONFIG_HAVE_SMP=n
+```
+
+<Warning>
+**Current limitations**:
+- SMP is not yet supported on Xen platform
+- Syscall functionality is disabled
+- Paging API is not available
+</Warning>
+
+## Xen Architecture
+
+### Hypercalls
+
+Hypercalls are the system call interface between guest and Xen hypervisor:
+
+<Tabs>
+  <Tab title="x86_64">
+    From `plat/xen/include/xen-x86/hypercall64.h`:
+    ```c
+    /* Schedule operations */
+    static inline int HYPERVISOR_sched_op(int cmd, void *arg)
+    {
+        return _hypercall2(int, sched_op, cmd, arg);
+    }
+    
+    /* Event channel operations */
+    static inline int HYPERVISOR_event_channel_op(int cmd, void *arg)
+    {
+        return _hypercall2(int, event_channel_op, cmd, arg);
+    }
+    
+    /* Memory operations */
+    static inline int HYPERVISOR_memory_op(unsigned int cmd, void *arg)
+    {
+        return _hypercall2(int, memory_op, cmd, arg);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="ARM64">
+    From `plat/xen/include/xen-arm/hypercall.h`:
+    ```c
+    /* ARM uses HVC instruction for hypercalls */
+    static inline int HYPERVISOR_sched_op(int cmd, void *arg)
+    {
+        return _hypercall2(int, sched_op, cmd, arg);
+    }
+    
+    /* Console I/O hypercall */
+    static inline int HYPERVISOR_console_io(int cmd, int count, char *str)
+    {
+        return _hypercall3(int, console_io, cmd, count, str);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+**Common hypercalls**:
+- `sched_op`: Scheduling operations (yield, shutdown, etc.)
+- `event_channel_op`: Manage event channels
+- `memory_op`: Memory management operations
+- `console_io`: Console input/output
+- `grant_table_op`: Grant table operations
+
+### Event Channels
+
+Event channels provide asynchronous notifications between domains:
+
+From `plat/xen/events.c`:
+```c
+void do_hypervisor_callback(struct __regs *regs)
+{
+    unsigned long l1, l2, port;
+    shared_info_t *s = HYPERVISOR_shared_info;
+    vcpu_info_t *vcpu_info = &s->vcpu_info[cpu];
+    
+    vcpu_info->evtchn_upcall_pending = 0;
+    
+    /* Process pending events */
+    l1 = uk_exchange_n(&vcpu_info->evtchn_pending_sel, 0);
+    while (l1 != 0) {
+        /* Find and handle pending event channels */
+        l2 = active_evtchns(s, l1i);
+        port = (l1i * sizeof(unsigned long) * 8) + l2i;
+        do_event(port, regs);
+    }
+}
+```
+
+**Event channel types**:
+- **VIRQ**: Virtual interrupts (timer, debug, console)
+- **IPI**: Inter-processor interrupts
+- **PIRQ**: Physical device interrupts
+- **Interdomain**: Communication between domains
+
+### Grant Tables
+
+Grant tables enable safe memory sharing between domains:
+
+```c
+/* Grant page access to another domain */
+grant_ref_t gnttab_grant_access(domid_t domid, 
+                                 unsigned long frame,
+                                 int readonly);
+
+/* Map granted page from another domain */
+int gnttab_map_grant_ref(struct gnttab_map_grant_ref *op);
+
+/* Unmap granted page */
+int gnttab_unmap_grant_ref(struct gnttab_unmap_grant_ref *op);
+```
+
+**Use cases**:
+- Network packet buffers (netfront/netback)
+- Block device I/O (blkfront/blkback)
+- Shared memory regions
+- Zero-copy data transfer
+
+### XenBus and XenStore
+
+XenBus provides device discovery and configuration:
+
+```c
+/* XenStore paths */
+/local/domain/<domid>/device/vif/0/mac       /* Network MAC address */
+/local/domain/<domid>/device/vbd/0/backend   /* Block device backend */
+/local/domain/<domid>/console/ring-ref       /* Console ring reference */
+```
+
+**Device discovery flow**:
+1. Guest probes XenBus for devices
+2. Reads device configuration from XenStore
+3. Establishes event channels
+4. Sets up grant table mappings
+5. Initializes device-specific protocol
+
+## Platform Implementation
+
+### Source Code Structure
+
+```
+plat/xen/
+├── Config.uk           # Xen configuration options
+├── Makefile.uk         # Build rules
+├── Linker.uk          # Linker script selection
+├── x86/               # x86-specific code
+│   ├── setup.c        # Platform initialization
+│   ├── entry64.S      # Entry point
+│   ├── traps.c        # Exception handling
+│   ├── mm.c           # Memory management
+│   ├── arch_events.c  # Event channel handling
+│   └── arch_time.c    # Timer support
+├── arm/               # ARM-specific code
+│   ├── setup.c        # Platform initialization
+│   ├── setup64.c      # ARM64 setup
+│   ├── entry64.S      # Entry point
+│   ├── traps.c        # Exception handling
+│   ├── mm.c           # Memory management
+│   └── hypercalls64.S # Hypercall stubs
+├── hypervisor.c       # Hypervisor interface
+├── events.c           # Event channel management
+├── lcpu.c             # CPU management
+├── memory.c           # Memory management
+├── io.c               # I/O operations
+└── shutdown.c         # Shutdown/reboot
+```
+
+### Initialization Flow
+
+<Steps>
+  <Step title="Xen Entry Point">
+    Entry via `plat/xen/x86/entry64.S:_start` or `plat/xen/arm/entry64.S:_start`:
+    
+    - Receive start_info structure from Xen
+    - Set up initial page tables (x86 PV)
+    - Initialize shared_info page
+  </Step>
+  
+  <Step title="Platform Setup">
+    From `plat/xen/x86/setup.c`:
+    ```c
+    void _ukplat_entry(struct ukplat_bootinfo *bi)
+    {
+        /* Map shared info page */
+        HYPERVISOR_shared_info = map_shared_info(start_info->shared_info);
+        
+        /* Initialize event channels */
+        init_events();
+        
+        /* Set up memory management */
+        arch_init_mm(start_info);
+        
+        /* Continue to common boot path */
+        uk_boot_entry();
+    }
+    ```
+  </Step>
+  
+  <Step title="Event Channel Setup">
+    - Bind VIRQs (timer, debug, console)
+    - Initialize event callbacks
+    - Enable upcall notifications
+  </Step>
+  
+  <Step title="Device Initialization">
+    - Probe XenBus for devices
+    - Initialize device drivers (netfront, blkfront)
+    - Set up grant tables
+  </Step>
+</Steps>
+
+### Shutdown and Reboot
+
+From `plat/xen/shutdown.c`:
+
+```c
+void ukplat_terminate(enum ukplat_gstate request)
+{
+    int reason;
+    
+    switch (request) {
+    case UKPLAT_HALT:
+        reason = SHUTDOWN_poweroff;
+        break;
+    case UKPLAT_RESTART:
+        reason = SHUTDOWN_reboot;
+        break;
+    default:
+        reason = SHUTDOWN_crash;
+        break;
+    }
+    
+#if CONFIG_LIBXENCONS
+    xencons_flush();  /* Flush console output */
+#endif
+    
+    /* Request shutdown via hypercall */
+    for (;;) {
+        struct sched_shutdown sched_shutdown = { .reason = reason };
+        HYPERVISOR_sched_op(SCHEDOP_shutdown, &sched_shutdown);
+    }
+}
+```
+
+**Shutdown reasons**:
+- `SHUTDOWN_poweroff`: Clean shutdown
+- `SHUTDOWN_reboot`: Reboot domain
+- `SHUTDOWN_crash`: Crash/panic
+- `SHUTDOWN_suspend`: Suspend domain
+
+## Paravirtual Devices
+
+### Netfront (Network)
+
+Paravirtualized network driver:
+
+```makefile
+CONFIG_LIBNETFRONT=y
+CONFIG_LIBUKNETDEV=y
+```
+
+**Domain configuration**:
+```python
+# In .xl file
+vif = [
+    'bridge=xenbr0, mac=00:16:3e:xx:xx:xx'
+]
+```
+
+**Features**:
+- Multiple TX/RX ring support
+- Checksum offload
+- Scatter-gather I/O
+- Efficient zero-copy paths
+
+### Blkfront (Block Storage)
+
+Paravirtualized block device driver:
+
+```makefile
+CONFIG_LIBBLKFRONT=y
+CONFIG_LIBUKBLKDEV=y
+```
+
+**Domain configuration**:
+```python
+# In .xl file
+disk = [
+    'format=raw, vdev=xvda, access=rw, target=/dev/vg0/guest-disk'
+]
+```
+
+**Features**:
+- Multiple block device support
+- Read/write operations
+- Direct I/O
+- Barrier operations
+
+### 9Pfront (Filesystem)
+
+9P filesystem for host directory sharing:
+
+```makefile
+CONFIG_LIB9PFRONT=y
+CONFIG_LIBUK9P=y
+CONFIG_LIBVFSCORE=y
+```
+
+**Domain configuration**:
+```python
+# In .xl file
+p9 = [
+    'tag=shared, security_model=none, path=/host/path'
+]
+```
+
+### XenConsole
+
+Paravirtualized console:
+
+```makefile
+CONFIG_LIBXENCONS=y
+CONFIG_LIBUKCONSOLE=y
+```
+
+**Usage**:
+```bash
+# Connect to domain console
+xl console <domain-name>
+
+# Emergency console (ARM)
+CONFIG_LIBXENEMGCONS=y
+```
+
+## Running on Xen
+
+### Building for Xen
+
+<Tabs>
+  <Tab title="Using kraft">
+    ```bash
+    # Build for Xen platform
+    kraft build --plat xen --arch x86_64
+    
+    # Output: build/app_xen-x86_64
+    ```
+  </Tab>
+  
+  <Tab title="Manual Build">
+    ```bash
+    # Configure
+    make menuconfig
+    # Select: Platform Configuration -> [*] Xen guest image
+    
+    # Build
+    make
+    
+    # Output: build/app_xen-x86_64
+    ```
+  </Tab>
+</Tabs>
+
+### Domain Configuration
+
+Create a Xen domain configuration file:
+
+<Tabs>
+  <Tab title="PV Domain (x86_64)">
+    ```python
+    # app.xl
+    type = "pv"
+    name = "unikraft-app"
+    kernel = "build/app_xen-x86_64"
+    memory = 128
+    vcpus = 1
+    
+    # Root device
+    root = "/dev/xvda ro"
+    
+    # Extra kernel parameters
+    extra = "console=hvc0"
+    
+    # Networking
+    vif = [ 'bridge=xenbr0, mac=00:16:3e:00:00:01' ]
+    
+    # Block devices
+    disk = [
+        'format=raw, vdev=xvda, access=ro, target=/path/to/rootfs.img'
+    ]
+    
+    # Console
+    on_poweroff = "destroy"
+    on_reboot = "restart"
+    on_crash = "preserve"
+    ```
+  </Tab>
+  
+  <Tab title="PVH Domain (x86_64)">
+    ```python
+    # app.xl
+    type = "pvh"
+    name = "unikraft-app-pvh"
+    kernel = "build/app_xen-x86_64"
+    memory = 256
+    vcpus = 2
+    
+    # PVH-specific
+    pvh = 1
+    
+    # Networking
+    vif = [ 'type=vif, bridge=xenbr0' ]
+    
+    # Block devices
+    disk = [ 'format=qcow2, vdev=xvda, target=/images/disk.qcow2' ]
+    ```
+  </Tab>
+  
+  <Tab title="ARM64 Domain">
+    ```python
+    # app.xl
+    type = "pvh"  # ARM uses PVH
+    name = "unikraft-app-arm"
+    kernel = "build/app_xen-arm64"
+    memory = 128
+    vcpus = 1
+    
+    # ARM-specific
+    arch = "arm64"
+    
+    # Device tree
+    dtb = "/boot/guest.dtb"
+    
+    # Networking
+    vif = [ 'bridge=xenbr0' ]
+    ```
+  </Tab>
+</Tabs>
+
+### Managing Domains
+
+<Tabs>
+  <Tab title="Create and Start">
+    ```bash
+    # Create domain from config
+    xl create app.xl
+    
+    # Create and attach console
+    xl create -c app.xl
+    
+    # Create paused
+    xl create -p app.xl
+    xl unpause <domain-name>
+    ```
+  </Tab>
+  
+  <Tab title="Monitor">
+    ```bash
+    # List running domains
+    xl list
+    
+    # Domain info
+    xl info
+    xl domid <domain-name>
+    
+    # Console access
+    xl console <domain-name>
+    
+    # Top-like monitoring
+    xl top
+    ```
+  </Tab>
+  
+  <Tab title="Lifecycle">
+    ```bash
+    # Shutdown domain
+    xl shutdown <domain-name>
+    
+    # Force destroy
+    xl destroy <domain-name>
+    
+    # Reboot
+    xl reboot <domain-name>
+    
+    # Pause/unpause
+    xl pause <domain-name>
+    xl unpause <domain-name>
+    ```
+  </Tab>
+</Tabs>
+
+## Memory Management
+
+### Physical-to-Machine (P2M) Mapping
+
+On x86 PV, guests maintain a P2M table mapping pseudo-physical addresses to machine addresses:
+
+```makefile
+CONFIG_XEN_PV_BUILD_P2M=y
+```
+
+From `plat/xen/x86/mm.c`:
+```c
+/* P2M table management */
+unsigned long pfn_to_mfn(unsigned long pfn);
+unsigned long mfn_to_pfn(unsigned long mfn);
+```
+
+**Why P2M?**
+- Xen controls real physical memory (machine frames)
+- Guests see pseudo-physical memory (page frame numbers)
+- P2M table translates between guest and hypervisor views
+
+### Memory Ballooning
+
+Adjust domain memory dynamically:
+
+```bash
+# Set target memory (MB)
+xl mem-set <domain-name> 256
+
+# Maximum memory
+xl mem-max <domain-name> 512
+```
+
+## Performance Considerations
+
+### Event Channel Latency
+
+Event channels are very efficient for notifications:
+
+- **Typical latency**: ~2-5 microseconds
+- **Use for**: Interrupt-like notifications, device events
+- **Avoid for**: High-frequency polling (use shared memory instead)
+
+### Grant Table Performance
+
+Optimize grant table usage:
+
+```c
+/* Batch grant operations */
+struct gnttab_map_grant_ref ops[BATCH_SIZE];
+HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, ops, BATCH_SIZE);
+
+/* Reduce grant/revoke overhead */
+// Keep grants mapped when possible
+// Use persistent grants for frequently accessed pages
+```
+
+### virtio vs Paravirt
+
+Consider virtio (on KVM) vs Xen paravirt devices:
+
+| Feature | Xen Paravirt | virtio (KVM) |
+|---------|--------------|--------------|
+| Overhead | Very low | Low |
+| Flexibility | Xen-specific | Cross-platform |
+| Performance | Excellent | Excellent |
+| Features | Mature | Modern, extensible |
+
+## Debugging
+
+### Console Output
+
+Enable verbose console:
+
+```makefile
+CONFIG_LIBXENCONS=y
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+```
+
+Access console:
+```bash
+# Attach to console
+xl console <domain-name>
+
+# View console ring buffer
+xl dmesg <domain-name>
+```
+
+### Xen Debug Keys
+
+Enable Xen debug output:
+
+```bash
+# Dump domain info (from dom0)
+xl debug-keys d
+
+# View Xen console
+xl dmesg
+```
+
+### Event Channel Debugging
+
+Monitor event channel activity:
+
+```bash
+# View event channel bindings
+cat /sys/kernel/debug/xen/evtchn
+
+# Trace event channel operations
+xl debug-keys e
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Domain creation fails" icon="triangle-exclamation">
+    **Symptoms**: `xl create` fails with error
+    
+    **Common causes**:
+    - Incorrect kernel path in .xl config
+    - Insufficient memory
+    - Invalid domain type (PV vs PVH)
+    
+    **Solutions**:
+    ```bash
+    # Check Xen logs
+    xl dmesg | tail
+    
+    # Verify kernel exists
+    ls -l build/app_xen-x86_64
+    
+    # Check available memory
+    xl info | grep free_memory
+    ```
+  </Accordion>
+  
+  <Accordion title="No console output" icon="terminal">
+    **Symptoms**: Domain runs but no console output
+    
+    **Solutions**:
+    - Enable XenConsole driver: `CONFIG_LIBXENCONS=y`
+    - Check console configuration in .xl file
+    - Verify console device in guest
+    
+    ```bash
+    # Check console connection
+    xl console-list
+    
+    # Try emergency console
+    xl console -t emergency <domain-name>
+    ```
+  </Accordion>
+  
+  <Accordion title="Network not working" icon="wifi">
+    **Symptoms**: Network device not found or not working
+    
+    **Solutions**:
+    - Enable netfront: `CONFIG_LIBNETFRONT=y`
+    - Check bridge configuration in dom0
+    - Verify vif configuration in .xl file
+    
+    ```bash
+    # Check domain network interfaces
+    xl network-list <domain-name>
+    
+    # Verify bridge in dom0
+    brctl show xenbr0
+    ```
+  </Accordion>
+  
+  <Accordion title="Domain crashes on boot" icon="circle-xmark">
+    **Symptoms**: Domain crashes immediately after creation
+    
+    **Solutions**:
+    - Check for SMP configuration (not supported)
+    - Verify architecture matches kernel
+    - Review crash dump
+    
+    ```bash
+    # Preserve crash info
+    on_crash = "preserve"
+    
+    # Examine crash
+    xl coredump-list
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration and Snapshots
+
+### Domain Migration
+
+<Warning>
+Unikraft Xen domains currently have limited live migration support. State migration requires application-level checkpointing.
+</Warning>
+
+```bash
+# Save domain state
+xl save <domain-name> saved-state.img
+
+# Restore domain
+xl restore saved-state.img
+```
+
+### Snapshots
+
+Create domain snapshots:
+
+```bash
+# Create snapshot of block device
+xl block-list <domain-name>
+lvcreate -s -L 1G -n snap /dev/vg0/guest-disk
+
+# Create memory snapshot
+xl save <domain-name> memory-snap.img
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Memory Configuration" icon="memory">
+    - Start with minimal memory (64-128MB)
+    - Add memory based on application needs
+    - Use ballooning for dynamic adjustment
+    - Monitor memory usage with `xl top`
+  </Accordion>
+  
+  <Accordion title="Device Configuration" icon="plug">
+    - Use paravirt devices (netfront/blkfront) for best performance
+    - Configure appropriate number of event channels
+    - Use persistent grants for frequently accessed devices
+    - Minimize grant table operations
+  </Accordion>
+  
+  <Accordion title="Security" icon="shield">
+    - Run untrusted code in separate domains
+    - Use grant tables for controlled memory sharing
+    - Minimize domain privileges
+    - Isolate network access with proper vif configuration
+  </Accordion>
+  
+  <Accordion title="Performance" icon="gauge-high">
+    - Pin vCPUs to physical CPUs for consistent performance
+    - Use event channels efficiently
+    - Batch hypercalls when possible
+    - Profile with Xen tools (`xl top`, `xentrace`)
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="KVM Platform" icon="computer" href="/platforms/kvm">
+    Compare with KVM platform support
+  </Card>
+  
+  <Card title="Platform Overview" icon="layer-group" href="/platforms/overview">
+    Understand platform architecture
+  </Card>
+  
+  <Card title="Networking" icon="network-wired" href="/guides/networking">
+    Configure network devices
+  </Card>
+  
+  <Card title="Storage" icon="database" href="/guides/storage">
+    Set up block devices and filesystems
+  </Card>
+</CardGroup>

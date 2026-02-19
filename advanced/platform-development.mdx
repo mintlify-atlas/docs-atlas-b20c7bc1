@@ -1,0 +1,739 @@
+---
+title: Platform Development
+description: Comprehensive guide to developing new platform support for Unikraft
+---
+
+Platform support enables Unikraft to run on different hypervisors, hardware, and execution environments. This guide covers developing new platform implementations.
+
+## Platform Architecture
+
+Platforms in Unikraft bridge the gap between the hardware/hypervisor and the portable core libraries.
+
+### Platform Responsibilities
+
+A platform implementation must provide:
+
+1. **Boot code**: Entry point and early initialization
+2. **Memory management**: Physical memory layout and allocation
+3. **Console/Debug output**: Early console for debugging
+4. **Interrupt handling**: Setup interrupt controllers
+5. **Time/Clock**: Timekeeping and timer facilities
+6. **CPU management**: CPU detection and SMP support
+7. **Device enumeration**: Discover available hardware
+8. **Shutdown/Reboot**: System power management
+
+## Directory Structure
+
+Platform layout in `plat/`:
+
+```
+plat/myplat/
+├── Config.uk              # Platform configuration
+├── Makefile.uk            # Build rules
+├── include/
+│   └── myplat/
+│       └── config.h       # Platform-specific config
+├── x86/                   # x86_64 support
+│   ├── entry64.S          # Boot entry
+│   ├── setup.c            # Platform setup
+│   ├── link64.lds.S       # Linker script
+│   └── ...
+├── arm/                   # ARM64 support
+│   ├── entry64.S
+│   ├── setup.c
+│   ├── link64.lds.S
+│   └── ...
+├── memory.c               # Memory management
+├── io.c                   # I/O operations
+└── shutdown.c             # Power management
+```
+
+Common platform code is shared in `plat/common/`.
+
+## Platform Registration
+
+### Makefile.uk Structure
+
+```makefile
+##
+## Platform registration
+##
+$(eval $(call addplat_s,myplat,$(CONFIG_PLAT_MYPLAT)))
+
+##
+## Platform library registration
+##
+$(eval $(call addplatlib,myplat,libmyplat))
+
+##
+## Platform library definitions
+##
+LIBMYPLAT_ASINCLUDES-y  += -I$(LIBMYPLAT_BASE)/include
+LIBMYPLAT_ASINCLUDES-y  += -I$(UK_PLAT_COMMON_BASE)/include
+LIBMYPLAT_CINCLUDES-y   += -I$(LIBMYPLAT_BASE)/include
+LIBMYPLAT_CINCLUDES-y   += -I$(UK_PLAT_COMMON_BASE)/include
+
+LIBMYPLAT_ASFLAGS  += -DMYPLAT -DUK_USE_SECTION_SEGMENTS
+LIBMYPLAT_CFLAGS   += -DMYPLAT -DUK_USE_SECTION_SEGMENTS
+LIBMYPLAT_CXXFLAGS += -DMYPLAT -DUK_USE_SECTION_SEGMENTS
+
+##
+## Linker script
+##
+ifeq ($(CONFIG_ARCH_X86_64),y)
+UK_PLAT_MYPLAT_DEF_LDS := $(CONFIG_UK_BASE)/plat/myplat/x86/link64.lds.S
+else ifeq ($(CONFIG_ARCH_ARM_64),y)
+UK_PLAT_MYPLAT_DEF_LDS := $(CONFIG_UK_BASE)/plat/myplat/arm/link64.lds.S
+endif
+
+##
+## Architecture: x86_64
+##
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(UK_PLAT_COMMON_BASE)/x86/traps.c|isr
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(UK_PLAT_COMMON_BASE)/x86/cpu_native.c|common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(UK_PLAT_COMMON_BASE)/x86/lcpu.c|x86_common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(UK_PLAT_COMMON_BASE)/tls.c|common
+
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYPLAT_BASE)/x86/entry64.S|x86
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYPLAT_BASE)/x86/setup.c
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYPLAT_BASE)/x86/pagetable64.S
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYPLAT_BASE)/x86/traps.c
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYPLAT_BASE)/x86/time.c
+
+##
+## Architecture: ARM64
+##
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/cpu_native.c|common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/cache64.S|common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/time.c|common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/generic_timer.c|common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/lcpu.c|arm64_common
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/arm/traps_arm64.c|isr
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(UK_PLAT_COMMON_BASE)/tls.c|common
+
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYPLAT_BASE)/arm/entry64.S|arm
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYPLAT_BASE)/arm/exceptions.S|isr
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYPLAT_BASE)/arm/pagetable64.S
+LIBMYPLAT_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYPLAT_BASE)/arm/setup.c
+
+##
+## Common platform sources
+##
+LIBMYPLAT_SRCS-y += $(LIBMYPLAT_BASE)/memory.c
+LIBMYPLAT_SRCS-y += $(LIBMYPLAT_BASE)/io.c
+LIBMYPLAT_SRCS-y += $(LIBMYPLAT_BASE)/shutdown.c
+LIBMYPLAT_SRCS-y += $(UK_PLAT_COMMON_BASE)/lcpu.c|common
+LIBMYPLAT_SRCS-y += $(UK_PLAT_COMMON_BASE)/memory.c|common
+LIBMYPLAT_SRCS-y += $(UK_PLAT_MYPLAT_DEF_LDS)
+
+# Boot info support
+LIBMYPLAT_SRCS-y += $(UK_PLAT_COMMON_BASE)/bootinfo.c|common
+LIBMYPLAT_SRCS-$(CONFIG_LIBFDT) += $(UK_PLAT_COMMON_BASE)/bootinfo_fdt.c|common
+LIBMYPLAT_SRCS-y += $(UK_PLAT_COMMON_BASE)/bootinfo.lds.S|common
+
+# Paging support
+ifeq ($(CONFIG_PAGING),y)
+LIBMYPLAT_SRCS-y += $(UK_PLAT_COMMON_BASE)/paging.c|isr
+endif
+```
+
+### Config.uk Structure
+
+```kconfig
+menuconfig PLAT_MYPLAT
+	bool "MyPlat - Description"
+	default n
+	depends on (ARCH_X86_64 || ARCH_ARM_64)
+	select LIBUKDEBUG
+	select LIBUKBOOT
+	select LIBUKALLOC
+	select LIBNOLIBC if !HAVE_LIBC
+	select HAVE_INTCTLR
+	imply LIBUKBUS_PLATFORM
+	help
+		Support for MyPlat platform.
+		This platform provides...
+
+if PLAT_MYPLAT
+
+choice
+	prompt "Boot protocol"
+	default MYPLAT_BOOT_PROTO_DEFAULT
+
+config MYPLAT_BOOT_PROTO_DEFAULT
+	bool "Default boot protocol"
+	help
+		Standard boot protocol for MyPlat.
+
+config MYPLAT_BOOT_PROTO_CUSTOM
+	bool "Custom boot protocol"
+	help
+		Custom boot protocol with extended features.
+endchoice
+
+config MYPLAT_MAX_CPUS
+	int "Maximum number of CPUs"
+	default 1
+	range 1 256
+	help
+		Maximum number of CPUs that can be used.
+
+config MYPLAT_EARLY_DEBUG
+	bool "Early debug console"
+	default y
+	help
+		Enable early console output for debugging.
+
+endif
+```
+
+## Boot Sequence
+
+### Entry Point (x86_64)
+
+Example `x86/entry64.S`:
+
+```asm
+#include <uk/asm.h>
+#include <uk/config.h>
+
+.section .data.boot
+.align 8
+.globl _libmyplat_bootstack
+_libmyplat_bootstack:
+	.space 4096
+_libmyplat_bootstack_end:
+
+.section .text.boot
+.globl _libmyplat_start
+.type _libmyplat_start, @function
+_libmyplat_start:
+	/* Clear direction flag */
+	cld
+
+	/* Setup boot stack */
+	movq $_libmyplat_bootstack_end, %rsp
+
+	/* Clear frame pointer */
+	xorq %rbp, %rbp
+
+	/* Save boot parameters */
+	movq %rdi, %r12    /* Save first parameter */
+	movq %rsi, %r13    /* Save second parameter */
+
+	/* Call platform setup */
+	movq %r12, %rdi
+	movq %r13, %rsi
+	call _libmyplat_entry
+
+	/* Should never return */
+1:	hlt
+	jmp 1b
+```
+
+### Entry Point (ARM64)
+
+Example `arm/entry64.S`:
+
+```asm
+#include <uk/asm.h>
+#include <uk/config.h>
+
+.section .data.boot
+.align 4096
+.globl _libmyplat_bootstack
+_libmyplat_bootstack:
+	.space 4096
+_libmyplat_bootstack_end:
+
+.section .text.boot
+.globl _libmyplat_start
+.type _libmyplat_start, @function
+_libmyplat_start:
+	/* Setup boot stack */
+	ldr x30, =_libmyplat_bootstack_end
+	mov sp, x30
+
+	/* Clear frame pointer */
+	mov x29, xzr
+
+	/* Call platform setup */
+	bl _libmyplat_entry
+
+	/* Should never return */
+1:	wfi
+	b 1b
+```
+
+### Platform Setup
+
+Example `setup.c`:
+
+```c
+#include <uk/config.h>
+#include <uk/plat/bootstrap.h>
+#include <uk/plat/common/bootinfo.h>
+#include <uk/print.h>
+#include <uk/assert.h>
+
+extern void ukplat_entry_argp(char *cmdline, size_t cmdline_len);
+
+void _libmyplat_entry(void *arg0, void *arg1)
+{
+	struct ukplat_bootinfo *bi;
+	
+	/* Initialize early console */
+	_libmyplat_init_console();
+	
+	uk_pr_info("Booting on MyPlat platform...\n");
+	
+	/* Initialize boot info structure */
+	bi = ukplat_bootinfo_get();
+	UK_ASSERT(bi);
+	
+	/* Parse boot parameters */
+	_libmyplat_parse_bootparams(arg0, arg1, bi);
+	
+	/* Setup memory regions */
+	_libmyplat_setup_memory(bi);
+	
+	/* Setup command line */
+	if (bi->cmdline && bi->cmdline_len > 0) {
+		ukplat_entry_argp((char *)bi->cmdline, bi->cmdline_len);
+	}
+	
+	/* Jump to common boot code */
+	ukplat_entry(bi);
+	
+	/* Never returns */
+}
+```
+
+## Memory Management
+
+### Memory Region Setup
+
+```c
+#include <uk/plat/common/bootinfo.h>
+#include <uk/plat/memory.h>
+
+void _libmyplat_setup_memory(struct ukplat_bootinfo *bi)
+{
+	struct ukplat_memregion_desc mrd;
+	__paddr_t start, end;
+	
+	/* Kernel image */
+	extern char _text[], _etext[], _data[], _end[];
+	
+	start = ukplat_virt_to_phys(_text);
+	end = ukplat_virt_to_phys(_end);
+	
+	mrd.pbase = start;
+	mrd.vbase = (__vaddr_t)_text;
+	mrd.len = end - start;
+	mrd.type = UKPLAT_MEMRT_KERNEL;
+	mrd.flags = UKPLAT_MEMRF_READ | UKPLAT_MEMRF_WRITE;
+	ukplat_memregion_list_insert(&bi->mrds, &mrd);
+	
+	/* Available memory */
+	start = ALIGN_UP(end, __PAGE_SIZE);
+	end = _libmyplat_get_memory_size();
+	
+	mrd.pbase = start;
+	mrd.vbase = start; /* Direct mapping */
+	mrd.len = end - start;
+	mrd.type = UKPLAT_MEMRT_FREE;
+	mrd.flags = UKPLAT_MEMRF_READ | UKPLAT_MEMRF_WRITE;
+	ukplat_memregion_list_insert(&bi->mrds, &mrd);
+	
+	/* Reserved regions (device memory, etc.) */
+	_libmyplat_add_reserved_regions(bi);
+}
+```
+
+### I/O Memory Access
+
+```c
+#include <uk/plat/io.h>
+#include <uk/arch/types.h>
+
+void _libmyplat_outb(__u16 port, __u8 value)
+{
+	/* Platform-specific I/O write */
+	__asm__ __volatile__("outb %0, %1"
+			     : : "a"(value), "Nd"(port));
+}
+
+__u8 _libmyplat_inb(__u16 port)
+{
+	__u8 value;
+	
+	__asm__ __volatile__("inb %1, %0"
+			     : "=a"(value) : "Nd"(port));
+	return value;
+}
+
+void *_libmyplat_ioremap(__paddr_t paddr, __sz len)
+{
+	/* For now, use direct mapping */
+	/* In production, use proper page table mapping */
+	return (void *)(__vaddr_t)paddr;
+}
+```
+
+## Interrupt Handling
+
+### Interrupt Controller Setup
+
+```c
+#include <uk/plat/irq.h>
+#include <uk/intctlr.h>
+
+int _libmyplat_irq_init(void)
+{
+	int rc;
+	
+	/* Initialize interrupt controller */
+	rc = ukintctlr_probe();
+	if (rc < 0) {
+		uk_pr_err("Failed to initialize interrupt controller: %d\n", rc);
+		return rc;
+	}
+	
+	uk_pr_info("Interrupt controller initialized\n");
+	return 0;
+}
+
+unsigned long ukplat_lcpu_save_irqf(void)
+{
+	unsigned long flags;
+	
+#ifdef CONFIG_ARCH_X86_64
+	__asm__ __volatile__("pushfq; popq %0; cli"
+			     : "=r"(flags) :: "memory");
+#elif CONFIG_ARCH_ARM_64
+	__asm__ __volatile__("mrs %0, daif; msr daifset, #2"
+			     : "=r"(flags) :: "memory");
+#endif
+	
+	return flags;
+}
+
+void ukplat_lcpu_restore_irqf(unsigned long flags)
+{
+#ifdef CONFIG_ARCH_X86_64
+	__asm__ __volatile__("pushq %0; popfq"
+			     :: "r"(flags) : "memory", "cc");
+#elif CONFIG_ARCH_ARM_64
+	__asm__ __volatile__("msr daif, %0"
+			     :: "r"(flags) : "memory");
+#endif
+}
+```
+
+## Time and Clocks
+
+### Timer Implementation
+
+```c
+#include <uk/plat/time.h>
+#include <uk/arch/time.h>
+
+static __nsec _libmyplat_tsc_freq;
+
+__nsec ukplat_monotonic_clock(void)
+{
+	__u64 tsc = rdtsc(); /* Read timestamp counter */
+	
+	return (__nsec)(tsc * 1000000000ULL / _libmyplat_tsc_freq);
+}
+
+__nsec ukplat_wall_clock(void)
+{
+	/* For simple platforms, same as monotonic */
+	return ukplat_monotonic_clock();
+}
+
+int ukplat_timer_init(void)
+{
+	/* Calibrate TSC frequency */
+	_libmyplat_tsc_freq = _libmyplat_calibrate_tsc();
+	
+	uk_pr_info("TSC frequency: %lu Hz\n", _libmyplat_tsc_freq);
+	return 0;
+}
+```
+
+## Console Output
+
+### Early Console
+
+```c
+#include <uk/plat/console.h>
+#include <uk/essentials.h>
+
+#define SERIAL_PORT 0x3F8  /* COM1 */
+
+void _libmyplat_init_console(void)
+{
+	/* Initialize serial port for early output */
+	outb(SERIAL_PORT + 1, 0x00);  /* Disable interrupts */
+	outb(SERIAL_PORT + 3, 0x80);  /* Enable DLAB */
+	outb(SERIAL_PORT + 0, 0x03);  /* Divisor low: 38400 baud */
+	outb(SERIAL_PORT + 1, 0x00);  /* Divisor high */
+	outb(SERIAL_PORT + 3, 0x03);  /* 8N1 */
+	outb(SERIAL_PORT + 2, 0xC7);  /* Enable FIFO */
+	outb(SERIAL_PORT + 4, 0x0B);  /* IRQs enabled, RTS/DSR set */
+}
+
+void _libmyplat_serial_write(char c)
+{
+	/* Wait for transmit buffer empty */
+	while ((inb(SERIAL_PORT + 5) & 0x20) == 0)
+		;
+	
+	outb(SERIAL_PORT, c);
+}
+
+void ukplat_coutk(const char *str)
+{
+	while (*str) {
+		if (*str == '\n')
+			_libmyplat_serial_write('\r');
+		_libmyplat_serial_write(*str++);
+	}
+}
+```
+
+## Shutdown and Reboot
+
+```c
+#include <uk/plat/bootstrap.h>
+
+void ukplat_halt(void)
+{
+	uk_pr_info("System halting...\n");
+	
+	/* Platform-specific halt */
+#ifdef CONFIG_ARCH_X86_64
+	/* ACPI shutdown or port I/O */
+	outw(0x604, 0x2000); /* QEMU/KVM shutdown */
+#elif CONFIG_ARCH_ARM_64
+	/* PSCI shutdown */
+	__psci_system_off();
+#endif
+	
+	/* Fallback: infinite loop with interrupts disabled */
+	__asm__ __volatile__("cli");
+	while (1)
+		__asm__ __volatile__("hlt");
+}
+
+void ukplat_restart(void)
+{
+	uk_pr_info("System restarting...\n");
+	
+#ifdef CONFIG_ARCH_X86_64
+	/* Keyboard controller reset */
+	outb(0x64, 0xFE);
+#elif CONFIG_ARCH_ARM_64
+	/* PSCI reset */
+	__psci_system_reset();
+#endif
+	
+	/* Fallback */
+	ukplat_halt();
+}
+
+void ukplat_crash(void)
+{
+	uk_pr_crit("System crashed!\n");
+	ukplat_halt();
+}
+```
+
+## SMP Support
+
+### CPU Initialization
+
+```c
+#include <uk/plat/lcpu.h>
+
+int ukplat_lcpu_start(__lcpu_idx cpu_id, __paddr_t entry)
+{
+	/* Platform-specific CPU startup */
+	uk_pr_info("Starting CPU %d at 0x%lx\n", cpu_id, entry);
+	
+	/* Setup startup parameters */
+	_libmyplat_smp_boot_params[cpu_id].entry = entry;
+	_libmyplat_smp_boot_params[cpu_id].stack = 
+		_libmyplat_alloc_cpu_stack();
+	
+	/* Send IPI to start CPU */
+	return _libmyplat_send_startup_ipi(cpu_id);
+}
+
+__lcpu_idx ukplat_lcpu_id(void)
+{
+#ifdef CONFIG_ARCH_X86_64
+	/* Read from APIC ID */
+	return _libmyplat_read_apic_id();
+#elif CONFIG_ARCH_ARM_64
+	__u64 mpidr;
+	__asm__ __volatile__("mrs %0, mpidr_el1" : "=r"(mpidr));
+	return mpidr & 0xFF;
+#endif
+}
+```
+
+## Device Tree Support (ARM)
+
+```c
+#include <uk/plat/common/bootinfo.h>
+#include <libfdt.h>
+
+int _libmyplat_parse_fdt(void *fdt, struct ukplat_bootinfo *bi)
+{
+	int rc, node;
+	const void *prop;
+	int len;
+	
+	rc = fdt_check_header(fdt);
+	if (rc != 0) {
+		uk_pr_err("Invalid FDT\n");
+		return -EINVAL;
+	}
+	
+	/* Parse memory nodes */
+	node = fdt_node_offset_by_prop_value(fdt, -1, 
+					     "device_type", "memory", 7);
+	while (node >= 0) {
+		prop = fdt_getprop(fdt, node, "reg", &len);
+		if (prop) {
+			_libmyplat_add_memory_from_fdt(bi, prop, len);
+		}
+		
+		node = fdt_node_offset_by_prop_value(fdt, node,
+						     "device_type", "memory", 7);
+	}
+	
+	/* Parse command line */
+	node = fdt_path_offset(fdt, "/chosen");
+	if (node >= 0) {
+		prop = fdt_getprop(fdt, node, "bootargs", &len);
+		if (prop) {
+			bi->cmdline = (__u64)prop;
+			bi->cmdline_len = len;
+		}
+	}
+	
+	return 0;
+}
+```
+
+## Linker Script
+
+Key sections for `link64.lds.S`:
+
+```ld
+OUTPUT_FORMAT("elf64-x86-64")
+OUTPUT_ARCH(i386:x86-64)
+ENTRY(_libmyplat_start)
+
+SECTIONS
+{
+	. = 0x100000;  /* Load address */
+
+	_base_addr = .;
+
+	/* Boot code and data */
+	.text.boot : {
+		*(.text.boot)
+	}
+
+	.data.boot : {
+		*(.data.boot)
+	}
+
+	/* Main sections */
+	.text : {
+		_text = .;
+		*(.text)
+		*(.text.*)
+		_etext = .;
+	}
+
+	.rodata : {
+		*(.rodata)
+		*(.rodata.*)
+	}
+
+	.data : {
+		_data = .;
+		*(.data)
+		*(.data.*)
+		_edata = .;
+	}
+
+	.bss : {
+		_bss = .;
+		*(.bss)
+		*(.bss.*)
+		*(COMMON)
+		_ebss = .;
+	}
+
+	_end = .;
+}
+```
+
+## Testing Your Platform
+
+### Minimal Test Configuration
+
+```yaml
+# kraft.yaml
+specification: v0.6
+name: platform-test
+unikraft:
+  version: stable
+targets:
+  - plat: myplat
+    arch: x86_64
+```
+
+### Debug Build
+
+```bash
+kraft configure \
+  CONFIG_PLAT_MYPLAT=y \
+  CONFIG_PLAT_MYPLAT_EARLY_DEBUG=y \
+  CONFIG_DEBUG_SYMBOLS_LVL3=y
+
+kraft build
+```
+
+## Best Practices
+
+1. **Reuse common code**: Use `plat/common/` extensively
+2. **Support multiple architectures**: x86_64 and ARM64 minimum
+3. **Early console**: Essential for debugging boot issues
+4. **Memory safety**: Validate all memory regions
+5. **Interrupt safety**: Properly save/restore interrupt state
+6. **Documentation**: Document platform-specific requirements
+7. **Testing**: Test on actual hardware/hypervisor
+8. **Compatibility**: Follow standard boot protocols when possible
+
+## Reference Platforms
+
+Study existing platforms:
+
+- **KVM** (`plat/kvm/`): Full-featured virtualization platform
+- **Xen** (`plat/xen/`): Paravirtualization platform
+- **Common** (`plat/common/`): Shared platform code
+
+## Next Steps
+
+- [Porting Applications](/advanced/porting-applications)
+- [Creating Libraries](/advanced/creating-libraries)
+- [Performance Optimization](/advanced/performance-optimization)

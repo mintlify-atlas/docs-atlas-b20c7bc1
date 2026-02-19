@@ -1,0 +1,483 @@
+---
+title: Console Drivers
+description: Serial console and VGA drivers for Unikraft
+---
+
+# Console Drivers
+
+Unikraft provides console drivers for serial communication and text output. These drivers are essential for debugging and system monitoring in both physical and virtualized environments.
+
+## Console Architecture
+
+Console drivers integrate with `libukconsole`, which provides a unified interface for character I/O. Multiple console devices can be registered, with output going to all enabled consoles.
+
+## Available Console Drivers
+
+### NS16550 UART Driver
+
+The NS16550 driver supports 16550-compatible UARTs, which are standard on x86 PCs and many ARM platforms.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBNS16550=y
+CONFIG_LIBUKCONSOLE=y
+```
+
+**Platform Support:**
+- x86_64: Port-mapped I/O (COM1-COM4)
+- ARM64: Memory-mapped I/O (FDT-based discovery)
+
+#### IBM PC/AT Mode (x86_64)
+
+For x86_64 systems, the driver supports up to 4 COM ports with fixed I/O addresses:
+
+**Configuration:**
+```kconfig
+CONFIG_HAVE_IBMPC_NS16550=y
+CONFIG_LIBNS16550=y
+
+# Enable COM ports
+CONFIG_LIBNS16550_COM1=y        # 0x3f8
+CONFIG_LIBNS16550_COM2=y        # 0x2f8
+CONFIG_LIBNS16550_COM3=y        # 0x3e8
+CONFIG_LIBNS16550_COM4=y        # 0x2e8
+```
+
+**Baud Rate Configuration:**
+
+Each COM port can be configured with different baud rates:
+
+```kconfig
+# COM1 configuration
+CONFIG_LIBNS16550_COM1=y
+CONFIG_LIBNS16550_COM1_BAUD_115200=y    # Default
+# CONFIG_LIBNS16550_COM1_BAUD_57600=y
+# CONFIG_LIBNS16550_COM1_BAUD_38400=y
+# CONFIG_LIBNS16550_COM1_BAUD_19200=y
+```
+
+Available baud rates: 115200, 57600, 38400, 19200
+
+**Early Console:**
+
+Enable early console output before full initialization:
+
+```kconfig
+CONFIG_LIBNS16550_EARLY_CONSOLE=y
+CONFIG_LIBNS16550_COM1_EARLY=y  # Use COM1 as early console
+```
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -serial stdio \           # COM1 to stdout
+    -serial file:com2.log \   # COM2 to file
+    -nographic \
+    unikernel.elf
+```
+
+#### FDT Mode (ARM64 and x86_64 with FDT)
+
+For ARM64 and FDT-based systems, the driver discovers UART devices from the device tree:
+
+**Configuration:**
+```kconfig
+CONFIG_LIBNS16550=y
+CONFIG_HAVE_FDT=y
+CONFIG_LIBUKOFW=y              # Open Firmware wrapper
+CONFIG_LIBUKBITOPS=y
+```
+
+**Early Console:**
+```kconfig
+CONFIG_LIBNS16550_EARLY_CONSOLE=y
+CONFIG_LIBUKBOOT=y
+```
+
+The driver reads the console from FDT `/chosen/stdout-path` property:
+
+```dts
+/ {
+    chosen {
+        stdout-path = "/uart@09000000";
+    };
+    
+    uart@09000000 {
+        compatible = "ns16550a";
+        reg = <0x09000000 0x1000>;
+        clock-frequency = <1843200>;
+        interrupts = <33>;
+    };
+};
+```
+
+**Command-line Override:**
+
+With `LIBUKLIBPARAM` enabled, override the console device:
+```bash
+ns16550.base=0x09000000
+```
+
+**Source:** `drivers/ukconsole/ns16550/`
+
+### PL011 UART Driver
+
+ARM PrimeCell UART (PL011) is the standard UART on ARM platforms like Raspberry Pi and QEMU virt machines.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBPL011=y
+CONFIG_LIBUKCONSOLE=y
+CONFIG_ARCH_ARM_64=y
+CONFIG_LIBUKOFW=y              # For FDT parsing
+CONFIG_LIBUKBITOPS=y
+```
+
+**Early Console:**
+```kconfig
+CONFIG_LIBPL011_EARLY_CONSOLE=y
+CONFIG_LIBUKBOOT=y
+```
+
+**Device Tree:**
+
+The driver discovers PL011 devices via FDT:
+
+```dts
+/ {
+    chosen {
+        stdout-path = "/pl011@09000000";
+    };
+    
+    pl011@09000000 {
+        compatible = "arm,pl011", "arm,primecell";
+        reg = <0x09000000 0x1000>;
+        clock-names = "uartclk", "apb_pclk";
+        clocks = <&uartclk>, <&apb_pclk>;
+        interrupts = <33>;
+    };
+};
+```
+
+**QEMU Example (ARM64):**
+```bash
+qemu-system-aarch64 \
+    -machine virt \
+    -cpu cortex-a57 \
+    -serial stdio \
+    -nographic \
+    -kernel unikernel.elf
+```
+
+The QEMU virt machine provides a PL011 UART at 0x09000000.
+
+**Command-line Override:**
+
+With `LIBUKLIBPARAM` enabled:
+```bash
+pl011.base=0x09000000
+```
+
+**Source:** `drivers/ukconsole/pl011/`
+
+### VGA Console Driver
+
+VGA text-mode console for x86 systems with VGA hardware.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBVGACONS=y
+CONFIG_LIBUKCONSOLE=y
+CONFIG_HAVE_IBMPC_VGA=y        # x86_64 only
+CONFIG_ARCH_X86_64=y
+```
+
+**Features:**
+- 80x25 text mode
+- 16 colors
+- Hardware scrolling
+- Cursor positioning
+
+**Memory Access:**
+- Video memory: 0xB8000
+- 4000 bytes (2000 characters)
+- Each character: 2 bytes (ASCII + attribute)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -vga std \           # Enable VGA
+    -display gtk \       # GUI display
+    unikernel.elf
+```
+
+**Note:** VGA console is typically used alongside serial console for debugging.
+
+**Source:** `drivers/ukconsole/vgacons/`
+
+## Console API
+
+The console drivers implement the `libukconsole` API:
+
+### Output Functions
+
+```c
+#include <uk/console.h>
+
+// Print character
+void uk_console_out(char c);
+
+// Print string
+void uk_console_print(const char *str);
+
+// Printf-style output
+void uk_console_printf(const char *fmt, ...);
+```
+
+### Early Console
+
+Early console is available before full system initialization:
+
+```c
+#include <uk/early_console.h>
+
+// Early output (if CONFIG_*_EARLY_CONSOLE=y)
+void uk_early_console_out(char c);
+```
+
+## Configuration Comparison
+
+| Feature | NS16550 (x86) | NS16550 (ARM) | PL011 | VGA |
+|---------|---------------|---------------|-------|-----|
+| Architecture | x86_64 | ARM64 | ARM64 | x86_64 |
+| Discovery | Fixed ports | FDT | FDT | Fixed address |
+| Baud Rate | Configurable | Device-specific | Device-specific | N/A |
+| Early Console | Yes | Yes | Yes | Yes |
+| Interrupt Support | Yes | Yes | Yes | No |
+| Multiple Devices | Up to 4 | Multiple (FDT) | Multiple (FDT) | Single |
+
+## Multi-Console Setup
+
+Multiple consoles can be enabled simultaneously:
+
+```kconfig
+# Enable both serial and VGA on x86
+CONFIG_LIBNS16550=y
+CONFIG_LIBNS16550_COM1=y
+CONFIG_LIBVGACONS=y
+
+# All output goes to both consoles
+```
+
+## Debugging Console Issues
+
+### No Output
+
+1. **Verify driver is enabled:**
+   ```bash
+   grep CONFIG_LIBNS16550 .config
+   grep CONFIG_LIBUKCONSOLE .config
+   ```
+
+2. **Check early console:**
+   ```kconfig
+   CONFIG_LIBNS16550_EARLY_CONSOLE=y
+   CONFIG_LIBUKDEBUG_PRINTK=y
+   ```
+
+3. **QEMU serial setup:**
+   ```bash
+   # Ensure -serial is specified
+   qemu-system-x86_64 -serial stdio ...
+   ```
+
+### Garbled Output
+
+1. **Check baud rate** matches on both sides
+2. **Verify clock frequency** in device tree (ARM)
+3. **Check for** timing issues with early console
+
+### FDT Discovery Failures (ARM)
+
+1. **Enable debug output:**
+   ```kconfig
+   CONFIG_LIBUKDEBUG=y
+   CONFIG_LIBUKDEBUG_PRINTK_INFO=y
+   ```
+
+2. **Verify FDT is loaded:**
+   ```kconfig
+   CONFIG_LIBFDT=y
+   CONFIG_LIBUKOFW=y
+   ```
+
+3. **Check device tree:**
+   ```bash
+   dtc -I dtb -O dts virt.dtb | grep -A10 uart
+   ```
+
+## Integration with Other Libraries
+
+### Debug Printing
+
+Console drivers integrate with `libukdebug`:
+
+```c
+#include <uk/print.h>
+
+uk_pr_info("Initialization complete\n");
+uk_pr_debug("Debug message\n");
+uk_pr_err("Error occurred\n");
+```
+
+**Configuration:**
+```kconfig
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTK_INFO=y  # Info level
+CONFIG_LIBUKDEBUG_PRINTK_DEBUG=y # Debug level
+```
+
+### Standard I/O
+
+With a C library (newlib, musl), console integrates with stdio:
+
+```c
+#include <stdio.h>
+
+printf("Hello from Unikraft\n");
+fprintf(stderr, "Error message\n");
+```
+
+## Performance Considerations
+
+### Interrupt vs. Polling
+
+**Interrupt mode** (default):
+- Efficient CPU usage
+- Better for interactive applications
+- Requires interrupt controller
+
+**Polling mode:**
+- Simpler implementation
+- Higher CPU usage
+- Useful for early boot
+
+### Buffering
+
+Console output may be buffered. To flush:
+
+```c
+#include <stdio.h>
+fflush(stdout);
+```
+
+Or use unbuffered mode:
+```c
+setvbuf(stdout, NULL, _IONBF, 0);
+```
+
+## Common Use Cases
+
+### Serial Console for Debugging
+
+Enable COM1 with early console:
+
+```kconfig
+CONFIG_LIBNS16550=y
+CONFIG_LIBNS16550_COM1=y
+CONFIG_LIBNS16550_COM1_BAUD_115200=y
+CONFIG_LIBNS16550_EARLY_CONSOLE=y
+CONFIG_LIBNS16550_COM1_EARLY=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+```
+
+Boot with QEMU:
+```bash
+qemu-system-x86_64 -serial stdio -nographic image.elf
+```
+
+### Logging to File
+
+Redirect serial output to file:
+
+```bash
+qemu-system-x86_64 -serial file:boot.log image.elf
+```
+
+### Multiple Consoles
+
+Output to both serial and VGA:
+
+```kconfig
+CONFIG_LIBNS16550_COM1=y
+CONFIG_LIBVGACONS=y
+```
+
+QEMU with GUI and serial:
+```bash
+qemu-system-x86_64 -serial stdio -vga std -display gtk image.elf
+```
+
+## Console Driver Implementation
+
+Implementing a custom console driver:
+
+```c
+#include <uk/console.h>
+
+static void my_console_output(const char *str, unsigned int len)
+{
+    for (unsigned int i = 0; i < len; i++) {
+        // Write character to hardware
+        write_hardware_register(str[i]);
+    }
+}
+
+static struct uk_console my_console = {
+    .name = "myconsole",
+    .output = my_console_output,
+};
+
+static int my_console_init(void)
+{
+    // Initialize hardware
+    init_hardware();
+    
+    // Register console
+    uk_console_register(&my_console);
+    
+    return 0;
+}
+
+uk_early_initcall(my_console_init);
+```
+
+## Source Code Reference
+
+Console driver source locations:
+
+```
+drivers/ukconsole/
+├── ns16550/
+│   ├── Config.uk           # Configuration options
+│   ├── Makefile.uk         # Build rules
+│   ├── ns16550.c           # Main driver
+│   └── ns16550.h           # Hardware definitions
+├── pl011/
+│   ├── Config.uk
+│   ├── Makefile.uk
+│   ├── pl011.c
+│   └── pl011.h
+└── vgacons/
+    ├── Config.uk
+    ├── Makefile.uk
+    └── vgacons.c
+```
+
+## References
+
+- NS16550 Datasheet: https://www.ti.com/lit/ds/symlink/pc16550d.pdf
+- PL011 Technical Reference: https://developer.arm.com/documentation/ddi0183/
+- UART Programming: https://en.wikibooks.org/wiki/Serial_Programming/
+- Source: `drivers/ukconsole/` in Unikraft repository

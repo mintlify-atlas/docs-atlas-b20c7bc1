@@ -1,0 +1,541 @@
+---
+title: ARM64 Architecture
+description: Comprehensive documentation for Unikraft's ARM64 (AArch64) architecture support
+---
+
+## Overview
+
+Unikraft provides comprehensive support for the ARM64 (AArch64) architecture, implementing ARMv8-A and later specifications with support for advanced features including NEON SIMD, pointer authentication, branch target identification, and memory tagging extensions.
+
+The ARM64 architecture implementation is located in `arch/arm/arm64/` and provides:
+
+- AArch64 execution state
+- VMSAv8-64 memory management with 4KB granules
+- Exception level (EL) management
+- Context switching and thread management
+- NEON floating-point and SIMD support
+- Advanced security features (PAC, BTI, MTE)
+- System register access via MRS/MSR instructions
+
+## Architecture-Specific Headers
+
+The ARM64 implementation is organized into several key header files:
+
+### Core Headers
+
+- **`uk/asm/arch.h`**: Architecture-specific definitions (source:arch/arm/arm64/include/uk/asm/arch.h:1)
+- **`uk/asm/lcpu.h`**: CPU control and system registers (source:arch/arm/arm64/include/uk/asm/lcpu.h:1)
+- **`uk/asm/paging.h`**: Memory management and page tables (source:arch/arm/arm64/include/uk/asm/paging.h:1)
+- **`uk/asm/ctx.h`**: Context switching support (source:arch/arm/arm64/include/uk/asm/ctx.h:1)
+
+## Processor State (PSTATE)
+
+The PSTATE register contains the current processor state flags (source:arch/arm/arm64/include/uk/asm/arch.h:39):
+
+```c
+#define PSTATE_N_BIT       (_AC(1, UL) << 28)  /* Negative */
+#define PSTATE_Z_BIT       (_AC(1, UL) << 29)  /* Zero */
+#define PSTATE_C_BIT       (_AC(1, UL) << 30)  /* Carry */
+#define PSTATE_V_BIT       (_AC(1, UL) << 31)  /* Overflow */
+#define PSTATE_D_BIT       (_AC(1, UL) << 6)   /* Debug mask */
+#define PSTATE_A_BIT       (_AC(1, UL) << 7)   /* SError mask */
+#define PSTATE_I_BIT       (_AC(1, UL) << 8)   /* IRQ mask */
+#define PSTATE_F_BIT       (_AC(1, UL) << 9)   /* FIQ mask */
+```
+
+## System Control Registers
+
+### SCTLR_EL1 - System Control Register
+
+Controls system-wide features at EL1 (source:arch/arm/arm64/include/uk/asm/arch.h:269):
+
+```c
+#define SCTLR_EL1_M_BIT      (_AC(1, UL) << 0)   /* MMU enable */
+#define SCTLR_EL1_A_BIT      (_AC(1, UL) << 1)   /* Alignment check */
+#define SCTLR_EL1_C_BIT      (_AC(1, UL) << 2)   /* Data cache enable */
+#define SCTLR_EL1_SA_BIT     (_AC(1, UL) << 3)   /* Stack alignment EL1 */
+#define SCTLR_EL1_SA0_BIT    (_AC(1, UL) << 4)   /* Stack alignment EL0 */
+#define SCTLR_EL1_I_BIT      (_AC(1, UL) << 12)  /* Instruction cache */
+#define SCTLR_EL1_WXN_BIT    (_AC(1, UL) << 19)  /* Write implies XN */
+```
+
+### TCR_EL1 - Translation Control Register
+
+Configures the memory management unit (source:arch/arm/arm64/include/uk/asm/arch.h:316):
+
+```c
+#define TCR_EL1_T0SZ_SHIFT   0        /* Size of TTBR0 region */
+#define TCR_EL1_T0SZ_48      16       /* 48-bit address space */
+#define TCR_EL1_IRGN0_WBWA   (_AC(0x1, UL) << 8)   /* Inner write-back */
+#define TCR_EL1_ORGN0_WBWA   (_AC(0x1, UL) << 10)  /* Outer write-back */
+#define TCR_EL1_SH0_IS       (_AC(0x3, UL) << 12)  /* Inner shareable */
+#define TCR_EL1_TG0_4K       0        /* 4KB granule */
+#define TCR_EL1_IPS_48       5        /* 48-bit physical address */
+```
+
+### MAIR_EL1 - Memory Attribute Indirection Register
+
+Defines memory types (source:arch/arm/arm64/include/uk/asm/lcpu.h:41):
+
+```c
+#define MAIR_DEVICE_nGnRnE   0x00  /* Device, non-gathering, non-reordering */
+#define MAIR_DEVICE_nGnRE    0x04  /* Device, non-gathering, reordering */
+#define MAIR_DEVICE_GRE      0x0C  /* Device, gathering, reordering */
+#define MAIR_NORMAL_NC       0x44  /* Normal, non-cacheable */
+#define MAIR_NORMAL_WB       0xff  /* Normal, write-back cacheable */
+#define MAIR_NORMAL_WT       0xbb  /* Normal, write-through cacheable */
+```
+
+## Register Structure
+
+### General Purpose Registers
+
+The `__regs` structure defines the register layout for exception handling (source:arch/arm/arm64/include/uk/asm/lcpu.h:220):
+
+```c
+struct __regs {
+    __u64 x[30];        /* x0-x29: General purpose registers */
+    __u64 lr;           /* x30: Link register */
+    __u64 elr_el1;      /* Exception Link Register */
+    __u64 spsr_el1;     /* Saved Program Status Register */
+    __u64 esr_el1;      /* Exception Syndrome Register */
+    __u64 sp;           /* Stack pointer */
+    __u8 pad[8];        /* Padding for 16-byte alignment */
+};
+```
+
+### Function Calling Convention
+
+ARM64 follows the AAPCS64 calling convention (source:arch/arm/arm64/include/uk/asm/lcpu.h:197):
+
+<Tabs items={['Arguments', 'Return Values']}>
+<Tab value="Arguments">
+
+```c
+#define __fn_rarg0  x[0]   /* First argument */
+#define __fn_rarg1  x[1]   /* Second argument */
+#define __fn_rarg2  x[2]   /* Third argument */
+#define __fn_rarg3  x[3]   /* Fourth argument */
+#define __fn_rarg4  x[4]   /* Fifth argument */
+#define __fn_rarg5  x[5]   /* Sixth argument */
+#define __fn_rarg6  x[6]   /* Seventh argument */
+#define __fn_rarg7  x[7]   /* Eighth argument */
+```
+
+</Tab>
+<Tab value="Return Values">
+
+```c
+#define __fn_rret0  x[0]   /* Primary return value */
+#define __fn_rret1  x[1]   /* Secondary return value */
+```
+
+</Tab>
+</Tabs>
+
+### Callee-Saved Registers
+
+```c
+struct __callee_saved_regs {
+    __u64 callee[10];  /* x19-x28: Callee-saved */
+    __u64 fp;          /* x29: Frame pointer */
+    __u64 lr;          /* x30: Link register */
+};
+```
+
+## Memory Management
+
+### Paging Configuration
+
+Unikraft implements VMSAv8-64 with 4-level page tables (source:arch/arm/arm64/include/uk/asm/paging.h:68):
+
+```c
+#define PT_LEVELS            4
+#define PT_PTES_PER_LEVEL    512
+#define PT_LEVEL_SHIFT       9
+```
+
+### Page Sizes
+
+<Tabs items={['4KB Pages', '2MB Blocks', '1GB Blocks']}>
+<Tab value="4KB Pages">
+
+```c
+#define PAGE_LEVEL    0
+#define PAGE_SHIFT    12
+#define PAGE_SIZE     0x1000UL     /* 4 KB */
+#define PAGE_MASK     (~(PAGE_SIZE - 1))
+```
+
+</Tab>
+<Tab value="2MB Blocks">
+
+```c
+#define PAGE_LARGE_LEVEL  1
+#define PAGE_LARGE_SHIFT  21
+#define PAGE_LARGE_SIZE   0x200000UL   /* 2 MB */
+#define PAGE_LARGE_MASK   (~(PAGE_LARGE_SIZE - 1))
+```
+
+</Tab>
+<Tab value="1GB Blocks">
+
+```c
+#define PAGE_HUGE_LEVEL   2
+#define PAGE_HUGE_SHIFT   30
+#define PAGE_HUGE_SIZE    0x40000000UL /* 1 GB */
+#define PAGE_HUGE_MASK    (~(PAGE_HUGE_SIZE - 1))
+```
+
+</Tab>
+</Tabs>
+
+### Virtual and Physical Address Space
+
+```c
+#define ARM64_VADDR_BITS  48
+#define ARM64_PADDR_BITS  48
+```
+
+ARM64 supports 48-bit virtual and physical addressing in the default configuration.
+
+### Translation Table Descriptors
+
+Page table entry format (source:arch/arm/arm64/include/uk/asm/arch.h:399):
+
+```c
+#define PTE_VALID_BIT       1
+#define PTE_TYPE_MASK       0x3
+#define PTE_TYPE_BLOCK      1    /* Block descriptor */
+#define PTE_TYPE_PAGE       3    /* Page descriptor */
+#define PTE_TYPE_TABLE      3    /* Table descriptor */
+```
+
+### Page Attributes
+
+```c
+#define PTE_ATTR_AF         (1 << 10)           /* Access flag */
+#define PTE_ATTR_SH_IS      (3 << 8)            /* Inner shareable */
+#define PTE_ATTR_AP_RW      (0 << 6)            /* Read-write */
+#define PTE_ATTR_AP_RO      (1 << 7)            /* Read-only */
+#define PTE_ATTR_UXN        (_AC(1, UL) << 54)  /* User execute never */
+#define PTE_ATTR_PXN        (_AC(1, UL) << 53)  /* Privileged execute never */
+#define PTE_ATTR_XN         (PTE_ATTR_PXN | PTE_ATTR_UXN)
+```
+
+### Memory Attributes
+
+The PTE attribute index maps to MAIR_EL1 entries (source:arch/arm/arm64/include/uk/asm/lcpu.h:143):
+
+```c
+#define DEVICE_nGnRnE      0
+#define DEVICE_nGnRE       1
+#define DEVICE_GRE         2
+#define NORMAL_NC          3
+#define NORMAL_WT          4
+#define NORMAL_WB          5
+#define NORMAL_WB_TAGGED   6
+```
+
+### TLB Management
+
+```c
+static inline void ukarch_tlb_flush_entry(__vaddr_t vaddr)
+{
+    __u64 page_number = vaddr >> PAGE_SHIFT;
+    __asm__ __volatile__(
+        "   dsb  ishst\n"         /* Wait for writes */
+        "   tlbi vaae1is, %x0\n"  /* Invalidate by address */
+        "   dsb  ish\n"           /* Wait for TLB invalidation */
+        "   isb\n"                /* Sync context */
+        :: "r" (page_number) : "memory");
+}
+
+static inline void ukarch_tlb_flush(void)
+{
+    __asm__ __volatile__(
+        "   dsb  ishst\n"
+        "   tlbi vmalle1is\n"     /* Invalidate all */
+        "   dsb  ish\n"
+        "   isb\n"
+        ::: "memory");
+}
+```
+
+## Exception Handling
+
+### Exception Syndrome Register (ESR_EL1)
+
+Provides information about exceptions (source:arch/arm/arm64/include/uk/asm/arch.h:67):
+
+```c
+#define ESR_EC_SHIFT        26
+#define ESR_EC_MASK         _AC(0x00000000fc000000, UL)
+
+/* Exception classes */
+#define ESR_EL1_EC_UNKNOWN     0x00
+#define ESR_EL1_EC_SVC64       0x15   /* System call */
+#define ESR_EL1_EC_MMU_DABRT_EL0  0x24  /* Data abort from EL0 */
+#define ESR_EL1_EC_MMU_DABRT_EL1  0x25  /* Data abort from EL1 */
+#define ESR_EL1_EC_PC_ALIGN    0x22   /* PC alignment fault */
+#define ESR_EL1_EC_SP_ALIGN    0x26   /* SP alignment fault */
+```
+
+### Page Fault Status Codes
+
+```c
+#define ESR_ISS_ABRT_FSC_TRANS_L0   0x04  /* Translation fault L0 */
+#define ESR_ISS_ABRT_FSC_TRANS_L1   0x05  /* Translation fault L1 */
+#define ESR_ISS_ABRT_FSC_TRANS_L2   0x06  /* Translation fault L2 */
+#define ESR_ISS_ABRT_FSC_TRANS_L3   0x07  /* Translation fault L3 */
+#define ESR_ISS_ABRT_FSC_PERM_L3    0x0f  /* Permission fault L3 */
+```
+
+## Context Switching
+
+### Context Structure
+
+```c
+struct ukarch_ctx {
+    unsigned long ip;   /* Instruction pointer (PC) */
+    unsigned long sp;   /* Stack pointer */
+};
+```
+
+### Context Switch Assembly
+
+The context switch preserves callee-saved registers (source:arch/arm/arm64/ctx.S:122):
+
+```asm
+ENTRY(ukarch_ctx_switch)
+    str x18, [sp, #-16]!              /* Save x18 */
+    sub sp, sp, #__CALLEE_SAVED_SIZE
+    stp x19, x20, [sp, #16 * 0]
+    stp x21, x22, [sp, #16 * 1]
+    stp x23, x24, [sp, #16 * 2]
+    stp x25, x26, [sp, #16 * 3]
+    stp x27, x28, [sp, #16 * 4]
+    stp x29, x30, [sp, #16 * 5]
+    
+    adrp x30, restore_point
+    add x30, x30, :lo12:restore_point
+    mov x2, sp
+    stp x30, x2, [x0]                 /* Save to prev context */
+    
+    ldp x30, x2, [x1]                 /* Load from next context */
+    mov sp, x2
+    ret
+```
+
+## Extended State Management
+
+### NEON/FPU Context
+
+The extended context includes SIMD and floating-point state (source:arch/arm/arm64/include/uk/asm/ctx.h:38):
+
+```c
+#define UKARCH_ECTX_SIZE   520  /* 32 * 128-bit + FPSR + FPCR */
+#define UKARCH_ECTX_ALIGN  16
+```
+
+This includes:
+- **32 NEON registers**: 128 bits each (q0-q31)
+- **FPSR**: Floating-point Status Register (4 bytes)
+- **FPCR**: Floating-point Control Register (4 bytes)
+
+## Memory Barriers
+
+ARM64 provides various memory barrier instructions:
+
+```c
+#define isb()  __asm__ __volatile("isb" ::: "memory")
+#define dmb(opt)  __asm__ __volatile("dmb " #opt ::: "memory")
+#define dsb(opt)  __asm__ __volatile("dsb " #opt ::: "memory")
+
+#define mb()   dsb(sy)  /* Full system memory barrier */
+#define rmb()  dsb(ld)  /* Load barrier */
+#define wmb()  dsb(st)  /* Store barrier */
+```
+
+Barrier options:
+- **sy**: Full system
+- **st**: Store operations
+- **ld**: Load operations
+- **ish**: Inner shareable domain
+- **osh**: Outer shareable domain
+- **nsh**: Non-shareable domain
+
+## System Register Access
+
+### MRS/MSR Macros
+
+```c
+#define SYSREG_READ(reg)                            \
+({  __u64 val;                                      \
+    __asm__ __volatile__("mrs %0, " __STRINGIFY(reg) \
+                        : "=r" (val));              \
+    val;                                            \
+})
+
+#define SYSREG_WRITE(reg, val)                      \
+({  __asm__ __volatile__("msr " __STRINGIFY(reg) ", %0" \
+                        : : "r" ((__u64)(val)));    \
+})
+```
+
+### MMIO Access
+
+Inline assembly ensures correct device memory access:
+
+```c
+static inline __u32 ioreg_read32(const volatile __u32 *address)
+{
+    __u32 value;
+    __asm__ __volatile__("ldr %w0, [%1]" : "=r"(value) : "r"(address));
+    return value;
+}
+
+static inline void ioreg_write32(const volatile __u32 *address, __u32 value)
+{
+    __asm__ __volatile__("str %w0, [%1]" : : "rZ"(value), "r"(address));
+}
+```
+
+## Advanced Features
+
+### ARMv8.3 Pointer Authentication
+
+Provides protection against ROP attacks (source:arch/arm/arm64/Config.uk:152):
+
+```c
+config ARM64_FEAT_PAUTH
+    bool "Armv8.3 Pointer Authentication"
+    help
+        Enable signing and authentication of pointers.
+```
+
+### ARMv8.5 Branch Target Identification
+
+Protects against JOP attacks (source:arch/arm/arm64/Config.uk:161):
+
+```c
+config ARM64_FEAT_BTI
+    bool "Armv8.5 Branch Target Identification"
+    help
+        BTI places and verifies landing pads on branch targets.
+```
+
+### ARMv8.5 Memory Tagging Extensions
+
+Provides memory safety through tagged pointers (source:arch/arm/arm64/Config.uk:167):
+
+```c
+config ARM64_FEAT_MTE
+    bool "Armv8.5 Memory Tagging Extensions"
+    help
+        Protects against memory safety violations.
+```
+
+Tag check fault modes:
+- **Synchronous**: Immediate fault on tag mismatch
+- **Asynchronous**: Delayed reporting
+- **Asymmetric**: Synchronous reads, asynchronous writes
+
+## Processor Support
+
+Unikraft supports a wide range of ARM64 processors (source:arch/arm/arm64/Config.uk:1):
+
+<Tabs items={['Cortex-A', 'Neoverse', 'Generic']}>
+<Tab value="Cortex-A">
+
+- **Cortex-A34, A35, A53**: ARMv8.0-A
+- **Cortex-A55**: ARMv8.2-A with DotProd
+- **Cortex-A57, A72, A73**: High-performance cores
+- **Cortex-A75, A76, A77**: ARMv8.2-A with advanced features
+- **big.LITTLE configurations**: A57+A53, A72+A53, A73+A53, A75+A55, A76+A55
+
+</Tab>
+<Tab value="Neoverse">
+
+- **Neoverse E1**: Efficient server core
+- **Neoverse N1**: Balanced server core
+- **Neoverse N2**: Advanced server core with SVE2
+- **Neoverse V1**: High-performance server core
+
+</Tab>
+<Tab value="Generic">
+
+- **Generic Armv8**: Maximum compatibility
+- **Native**: Auto-detect host CPU
+
+</Tab>
+</Tabs>
+
+## Errata Workarounds
+
+### Cortex-A73 Erratum 858921
+
+Timer counter may return incorrect value (source:arch/arm/arm64/Config.uk:210):
+
+```c
+config ARM64_ERRATUM_858921
+    bool "Workaround for Cortex-A73 erratum 858921"
+    default y
+```
+
+### Cortex-A53 Erratum 835769
+
+Compile-time workaround via GCC flag (source:arch/arm/arm64/Config.uk:218):
+
+```c
+config ARM64_ERRATUM_835769
+    bool "Workaround for Cortex-A53 erratum 835769"
+    default y
+```
+
+## Cache Line Size
+
+```c
+#define CACHE_LINE_SIZE  64
+```
+
+Most ARM64 processors use 64-byte cache lines.
+
+## Stack Alignment
+
+```c
+#define UKARCH_SP_ALIGN       16
+#define UKARCH_SP_ALIGN_MASK  15
+```
+
+Stack pointers must be 16-byte aligned per AAPCS64.
+
+## Boot Process
+
+The ARM64 boot sequence:
+
+1. **Firmware Initialization**: UEFI or device tree boot
+2. **Exception Level Setup**: Typically start at EL2 or EL1
+3. **MMU Configuration**: Set up TTBR0_EL1, MAIR_EL1, TCR_EL1
+4. **Enable MMU**: Set SCTLR_EL1.M bit
+5. **System Initialization**: Configure GIC, timers
+6. **BSS Clearing**: Zero uninitialized data
+7. **Main Entry**: Jump to `ukplat_entry()`
+
+## Platform Support
+
+The ARM64 architecture is supported on:
+
+- **KVM**: Hardware-accelerated virtualization on ARM64 hosts
+- **Xen**: Paravirtualized ARM guests
+- **QEMU**: Full system emulation (virt machine type)
+- **Firecracker**: Lightweight microVMs on ARM64
+- **Raspberry Pi**: Native hardware (Pi 3/4)
+- **Cloud platforms**: AWS Graviton, Ampere Altra
+
+## References
+
+- **ARM Architecture Reference Manual for ARMv8-A**
+- **Procedure Call Standard for the ARM 64-bit Architecture (AAPCS64)**
+- **ARM Generic Interrupt Controller (GIC) Architecture Specification**
+- Source: `arch/arm/arm64/` directory in Unikraft repository

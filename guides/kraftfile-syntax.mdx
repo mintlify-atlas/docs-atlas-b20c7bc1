@@ -1,0 +1,645 @@
+---
+title: Kraftfile Syntax Reference
+description: Complete reference for Kraftfile configuration format
+---
+
+## Overview
+
+A `Kraftfile` is a YAML configuration file that defines how to build and package your Unikraft application. It serves as the main entry point for the `kraft` CLI tool.
+
+## Basic Structure
+
+Every Kraftfile must specify a spec version and at minimum a runtime or kernel:
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/path/to/app"]
+```
+
+## Specification Version
+
+The `spec` field defines the Kraftfile format version:
+
+```yaml
+spec: v0.6
+```
+
+Currently supported versions:
+- `v0.6` (Latest, recommended)
+- `v0.5`
+
+## Runtime Configuration
+
+### Using Pre-built Runtimes
+
+Specify a pre-built runtime from the Unikraft catalog:
+
+```yaml
+runtime: base:latest
+```
+
+Common runtimes:
+
+<CodeGroup>
+
+```yaml Base
+runtime: base:latest
+```
+
+```yaml Python
+runtime: python:3.10
+```
+
+```yaml Node.js
+runtime: node:18
+```
+
+```yaml Nginx
+runtime: nginx:1.25
+```
+
+</CodeGroup>
+
+### Using Full URLs
+
+Reference runtimes using complete URLs:
+
+```yaml
+runtime: unikraft.org/base:latest
+```
+
+### Version Pinning
+
+Pin specific versions for reproducible builds:
+
+```yaml
+runtime: python:3.10.12
+```
+
+## Kernel Configuration
+
+For advanced use cases, specify a custom kernel instead of a runtime:
+
+```yaml
+spec: v0.6
+
+kernel:
+  source: https://github.com/unikraft/unikraft.git
+  version: stable
+  kconfig:
+    - CONFIG_LIBVFSCORE=y
+    - CONFIG_LIBRAMFS=y
+```
+
+## Root Filesystem
+
+The `rootfs` field defines your application's filesystem.
+
+### Using Dockerfile
+
+Reference an existing Dockerfile:
+
+```yaml
+rootfs: ./Dockerfile
+```
+
+### Inline Dockerfile
+
+Define the filesystem build inline:
+
+```yaml
+rootfs: |
+  FROM alpine:latest
+  RUN apk add --no-cache curl
+  COPY app /app
+  WORKDIR /app
+```
+
+### Multi-stage Builds
+
+Use multi-stage Dockerfiles for smaller images:
+
+```yaml
+rootfs: |
+  FROM golang:1.21-alpine AS build
+  WORKDIR /src
+  COPY . .
+  RUN go build -o server .
+  
+  FROM scratch
+  COPY --from=build /src/server /server
+  COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+```
+
+### Using Pre-built Images
+
+Reference container images directly:
+
+```yaml
+rootfs:
+  image: myapp:latest
+```
+
+## Command Configuration
+
+Specify the command to run when the unikernel starts:
+
+### Array Format (Recommended)
+
+```yaml
+cmd: ["/usr/bin/python", "-m", "http.server", "8080"]
+```
+
+### String Format
+
+```yaml
+cmd: "/app/server --port 8080"
+```
+
+### With Working Directory
+
+```yaml
+workdir: /app
+cmd: ["./server"]
+```
+
+## Build Targets
+
+Define multiple build targets for different architectures and platforms:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+targets:
+  - name: qemu-x86_64
+    architecture: x86_64
+    platform: qemu
+  - name: kvm-x86_64
+    architecture: x86_64
+    platform: kvm
+  - name: qemu-arm64
+    architecture: arm64
+    platform: qemu
+
+rootfs: ./Dockerfile
+cmd: ["/app"]
+```
+
+### Target Fields
+
+- `name`: Target identifier (required)
+- `architecture`: CPU architecture (x86_64, arm64, arm)
+- `platform`: Hypervisor/platform (qemu, kvm, xen)
+
+## Template Configuration
+
+Use templates for common application patterns:
+
+```yaml
+spec: v0.6
+
+template: |unikraft.org/examples/http-go1.21:latest
+
+rootfs: |
+  FROM scratch
+  COPY server /server
+
+cmd: ["/server"]
+```
+
+## Environment Variables
+
+Set environment variables for your application:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+env:
+  PORT: "8080"
+  LOG_LEVEL: "info"
+  DATABASE_URL: "postgres://localhost/mydb"
+
+cmd: ["/app/server"]
+```
+
+## Volumes and Mounts
+
+Configure volume mounts for persistent storage:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+volumes:
+  - name: data
+    source: ./data
+    destination: /mnt/data
+  - name: config
+    source: ./config.yaml
+    destination: /etc/app/config.yaml
+    readonly: true
+
+cmd: ["/app"]
+```
+
+## Network Configuration
+
+Configure network settings:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+networks:
+  - name: default
+    mode: bridge
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+
+cmd: ["/app/server"]
+```
+
+## Library Configuration
+
+For make-based builds, specify external libraries:
+
+```yaml
+spec: v0.6
+
+kernel:
+  source: https://github.com/unikraft/unikraft.git
+  version: stable
+
+libraries:
+  musl:
+    source: https://github.com/unikraft/lib-musl.git
+    version: stable
+  lwip:
+    source: https://github.com/unikraft/lib-lwip.git
+    version: stable
+    kconfig:
+      - CONFIG_LWIP_DHCP=y
+```
+
+## Complete Examples
+
+### Simple Hello World (C)
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: |
+  FROM alpine:latest AS build
+  RUN apk add --no-cache gcc musl-dev
+  COPY hello.c /src/
+  WORKDIR /src
+  RUN gcc -static -o hello hello.c
+  
+  FROM scratch
+  COPY --from=build /src/hello /hello
+
+cmd: ["/hello"]
+```
+
+### Go Web Server
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+targets:
+  - name: qemu-x86_64
+    architecture: x86_64
+    platform: qemu
+
+rootfs: |
+  FROM golang:1.21-alpine AS build
+  WORKDIR /src
+  COPY go.mod go.sum ./
+  RUN go mod download
+  COPY . .
+  RUN CGO_ENABLED=0 go build -o server .
+  
+  FROM scratch
+  COPY --from=build /src/server /server
+  COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+env:
+  PORT: "8080"
+
+networks:
+  - ports:
+      - "8080:8080"
+
+cmd: ["/server"]
+```
+
+### Python Flask Application
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: python:3.10
+
+rootfs: |
+  FROM python:3.10-alpine
+  WORKDIR /app
+  
+  # Install dependencies
+  COPY requirements.txt .
+  RUN pip install --no-cache-dir -r requirements.txt
+  
+  # Copy application
+  COPY . .
+
+workdir: /app
+
+env:
+  FLASK_APP: "server.py"
+  FLASK_ENV: "production"
+
+networks:
+  - ports:
+      - "5000:5000"
+
+cmd: ["python", "-m", "flask", "run", "--host=0.0.0.0"]
+```
+
+### Rust Application with Dependencies
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+targets:
+  - name: qemu-x86_64
+    architecture: x86_64
+    platform: qemu
+
+rootfs: |
+  FROM rust:1.70-alpine AS build
+  RUN apk add --no-cache musl-dev
+  WORKDIR /src
+  
+  # Cache dependencies
+  COPY Cargo.toml Cargo.lock ./
+  RUN mkdir src && echo "fn main() {}" > src/main.rs
+  RUN cargo build --release
+  RUN rm -rf src
+  
+  # Build application
+  COPY . .
+  RUN cargo build --release
+  
+  FROM scratch
+  COPY --from=build /src/target/release/myapp /app
+
+cmd: ["/app"]
+```
+
+### Node.js with Nginx Frontend
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: node:18
+
+rootfs: |
+  FROM node:18-alpine AS build
+  WORKDIR /app
+  COPY package*.json ./
+  RUN npm ci --production
+  COPY . .
+  
+  FROM node:18-alpine
+  WORKDIR /app
+  COPY --from=build /app .
+
+workdir: /app
+
+env:
+  NODE_ENV: "production"
+  PORT: "3000"
+
+networks:
+  - ports:
+      - "3000:3000"
+
+cmd: ["node", "server.js"]
+```
+
+### Multi-Architecture Build
+
+```yaml Kraftfile
+spec: v0.6
+
+runtime: base:latest
+
+targets:
+  - name: qemu-x86_64
+    architecture: x86_64
+    platform: qemu
+  - name: qemu-arm64
+    architecture: arm64
+    platform: qemu
+  - name: kvm-x86_64
+    architecture: x86_64
+    platform: kvm
+
+rootfs: ./Dockerfile
+
+cmd: ["/app/server"]
+```
+
+## Advanced Configuration
+
+### Custom Build Arguments
+
+Pass build arguments to Dockerfile:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+rootfs:
+  dockerfile: ./Dockerfile
+  args:
+    VERSION: "1.2.3"
+    BUILD_DATE: "2024-01-01"
+
+cmd: ["/app"]
+```
+
+### Resource Constraints
+
+Set resource limits:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+resources:
+  memory: 512M
+  cpus: 2
+
+cmd: ["/app"]
+```
+
+### Security Options
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+security:
+  capabilities:
+    - CAP_NET_BIND_SERVICE
+  readonly_rootfs: true
+
+cmd: ["/app"]
+```
+
+## Kraftfile Best Practices
+
+### 1. Use Multi-stage Builds
+
+Keep images small by using multi-stage builds:
+
+```yaml
+rootfs: |
+  FROM builder AS build
+  # ... build steps ...
+  
+  FROM scratch
+  COPY --from=build /app /app
+```
+
+### 2. Pin Versions
+
+Always pin specific versions for reproducibility:
+
+```yaml
+runtime: python:3.10.12  # Good
+# runtime: python:latest  # Avoid
+```
+
+### 3. Minimize Layers
+
+Combine commands to reduce image size:
+
+```yaml
+rootfs: |
+  FROM alpine:latest
+  RUN apk add --no-cache curl vim && \
+      rm -rf /var/cache/apk/*
+```
+
+### 4. Use .dockerignore
+
+Create `.dockerignore` to exclude unnecessary files:
+
+```
+.git
+node_modules
+*.log
+.env
+```
+
+### 5. Environment-Specific Configuration
+
+Use environment variables for configuration:
+
+```yaml
+env:
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+  DATABASE_URL: "${DATABASE_URL}"
+```
+
+## Schema Validation
+
+Validate your Kraftfile syntax:
+
+```bash
+kraft pkg info .
+```
+
+This checks for:
+- Valid YAML syntax
+- Correct field names
+- Required fields
+- Type validation
+
+## Troubleshooting
+
+### Common Errors
+
+**Error**: "unknown field 'xyz'"
+
+```yaml
+# Check spec version supports the field
+spec: v0.6  # Ensure you're using the latest
+```
+
+**Error**: "runtime or kernel required"
+
+```yaml
+# Must specify either runtime or kernel
+runtime: base:latest
+```
+
+**Error**: "invalid architecture"
+
+```yaml
+# Use valid architecture names
+architecture: x86_64  # Valid: x86_64, arm64, arm
+```
+
+### Debugging Kraftfiles
+
+Enable verbose output:
+
+```bash
+kraft build --log-level debug
+```
+
+Show parsed configuration:
+
+```bash
+kraft pkg info . --show-config
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Applications" href="/guides/building-applications" icon="hammer">
+    Learn how to build unikernels from your Kraftfile
+  </Card>
+  <Card title="Configuration" href="/guides/configuration" icon="gear">
+    Explore advanced Kconfig options
+  </Card>
+  <Card title="Running Unikernels" href="/guides/running-unikernels" icon="play">
+    Deploy and run your configured unikernels
+  </Card>
+  <Card title="Examples" href="https://github.com/unikraft/catalog" icon="book">
+    Browse example Kraftfiles in the community catalog
+  </Card>
+</CardGroup>

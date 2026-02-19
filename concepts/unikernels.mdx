@@ -1,0 +1,203 @@
+---
+title: What are Unikernels?
+description: Understanding unikernels and why Unikraft is the next-generation unikernel development kit
+---
+
+## Introduction to Unikernels
+
+Unikernels are specialized, single-purpose operating systems designed to run a single application as efficiently as possible. Unlike traditional operating systems that support multiple applications and users, unikernels are built specifically for one application, containing only the minimal set of operating system components required to run that application.
+
+<Note>
+Unikraft is a radical, yet Linux-compatible with effortless tooling, technology for running applications as highly optimized, lightweight and single-purpose virtual machines.
+</Note>
+
+## How Unikernels Differ from Traditional OSes
+
+Traditional operating systems like Linux contain millions of lines of code to support a wide variety of hardware, applications, and use cases. Most of this code is never used by any single application. Unikernels take a different approach:
+
+<CardGroup cols={2}>
+  <Card title="Traditional OS" icon="server">
+    - General-purpose design
+    - Supports multiple applications
+    - Large codebase (millions of LoC)
+    - Slow boot times (seconds to minutes)
+    - Higher memory footprint
+    - Larger attack surface
+  </Card>
+  <Card title="Unikernel" icon="rocket">
+    - Application-specific design
+    - Single application per image
+    - Minimal codebase (only what's needed)
+    - Millisecond boot times
+    - Minimal memory footprint
+    - Reduced attack surface
+  </Card>
+</CardGroup>
+
+## Why Unikraft?
+
+Unikraft addresses the need for efficiency in modern computing environments. In today's cloud and edge computing landscape, resources are precious and performance is paramount.
+
+### Key Benefits
+
+#### Instantaneous Cold-boots
+
+While Linux-based systems might take tens of seconds to boot, Unikraft will be up in milliseconds. This enables:
+- Rapid scaling in response to demand
+- Efficient serverless architectures
+- Near-instant failover and recovery
+
+#### Optimized for Performance
+
+Built for performance from the ground up, Unikraft minimizes overheads and leverages platform-specific optimizations, ensuring applications achieve peak performance levels.
+
+```c
+// Example: Minimal boot sequence in Unikraft
+// Only essential initialization is performed
+void _ukplat_entry(void) {
+    ukplat_entry_argp(NULL, cmdline, sizeof(cmdline));
+}
+```
+
+#### Reduced Attack Surface
+
+By selectively including only necessary components, Unikraft reduces the attack surface significantly. Security benefits include:
+
+<AccordionGroup>
+  <Accordion title="Minimal Code Base">
+    Only the code your application needs is included. No unused kernel modules, drivers, or system utilities that could contain vulnerabilities.
+  </Accordion>
+  
+  <Accordion title="No Shell Access">
+    Unikernels typically don't include shells or system utilities that attackers could exploit to gain control.
+  </Accordion>
+  
+  <Accordion title="Hardware-Level Isolation">
+    When running as virtual machines, unikernels benefit from hardware-level isolation provided by hypervisors.
+  </Accordion>
+</AccordionGroup>
+
+#### Efficient Resource Utilization
+
+Unikraft optimizes resource utilization, leading to:
+- Smaller image sizes (often under 1MB)
+- Lower memory consumption
+- Higher server saturation
+- Reduced infrastructure costs
+
+<Info>
+Unikraft images can be as small as a few hundred kilobytes, compared to hundreds of megabytes for container images with full OS distributions.
+</Info>
+
+### Modular Design Philosophy
+
+Unikraft boasts a modular design approach, allowing developers to include only necessary components. This results in leaner and more efficient operating system configurations.
+
+The framework includes **80+ internal libraries** covering:
+- Memory allocators (binary buddy, region, pool)
+- Schedulers (cooperative, preemptive)
+- Network stacks and protocols
+- File systems (ramfs, 9pfs, virtiofs)
+- POSIX compatibility layers
+- Device drivers and platform support
+
+## Flexible Architecture Support
+
+Unikraft supports multiple hardware architectures:
+
+<Tabs>
+  <Tab title="x86_64">
+    Full support for x86-64 architecture with optimizations for modern Intel and AMD processors.
+  </Tab>
+  <Tab title="ARM64">
+    Complete ARMv8 64-bit support for cloud and edge deployments.
+  </Tab>
+  <Tab title="ARM32">
+    ARMv7 32-bit support for embedded and IoT applications.
+  </Tab>
+</Tabs>
+
+## Cloud and Edge Compatibility
+
+Designed for modern computing environments, Unikraft enables seamless deployment across:
+
+- **Cloud platforms**: AWS, Google Cloud, Azure
+- **Hypervisors**: KVM, Xen, VMware
+- **Edge computing**: Low-latency edge deployments
+- **Bare metal**: Direct hardware execution
+
+## Broad Language and Application Support
+
+Unikraft offers extensive support for multiple programming languages:
+
+- **C/C++**: Native support with full toolchain integration
+- **Python**: Run Python applications with minimal overhead
+- **Node.js**: JavaScript/TypeScript server applications
+- **Go**: Golang applications with native performance
+- **Rust**: Memory-safe systems programming
+- **And more**: Java, Ruby, Lua, WebAssembly
+
+## Developer Friendly
+
+Unikraft's intuitive toolchain and user-friendly interface simplify the development process:
+
+```bash
+# Install the kraft CLI tool
+curl -sSfL https://get.kraftkit.sh | sh
+
+# Run your first unikernel
+kraft run unikraft.org/helloworld:latest
+
+# View running instances
+kraft ps --all
+```
+
+<Tip>
+You can use existing Dockerfiles to build unikernels - no need to rewrite your application!
+</Tip>
+
+## Community-Driven Development
+
+Unikraft is an open-source project driven by a vibrant community of over 100 developers from industry and academia, fostering collaboration and innovation.
+
+<Card title="Get Involved" icon="users" href="https://unikraft.org/community">
+  Join the Unikraft community on Discord, contribute to the project, or attend community events.
+</Card>
+
+## Use Cases
+
+Unikraft excels in various scenarios:
+
+1. **Serverless Computing**: Millisecond cold starts enable efficient function-as-a-service platforms
+2. **Microservices**: Lightweight, isolated services with minimal overhead
+3. **Edge Computing**: Fast boot and small footprint ideal for resource-constrained edge devices
+4. **NFV (Network Functions Virtualization)**: High-performance network functions
+5. **IoT Gateways**: Efficient processing at the edge with security benefits
+6. **Latency-Sensitive Applications**: Real-time systems requiring predictable performance
+
+## Getting Started
+
+Ready to build your first unikernel? Check out these resources:
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/getting-started/quickstart">
+    Build and run your first unikernel in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand Unikraft's architecture
+  </Card>
+  <Card title="Modular Design" icon="cubes" href="/concepts/modular-design">
+    Learn about the modular library system
+  </Card>
+  <Card title="Build System" icon="hammer" href="/concepts/build-system">
+    Explore the Kconfig-based build system
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+Now that you understand what unikernels are and why Unikraft is powerful, dive deeper into:
+
+- [Unikraft's Architecture](/concepts/architecture) - Learn how Unikraft is structured internally
+- [Modular Design](/concepts/modular-design) - Understand the library-based approach
+- [Build System](/concepts/build-system) - Master the configuration and build process

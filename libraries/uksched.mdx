@@ -1,0 +1,700 @@
+---
+title: uksched - Scheduling Library
+description: Scheduler abstraction layer providing thread management and scheduling interfaces
+---
+
+The `uksched` library provides an abstraction layer for thread scheduling in Unikraft. It defines interfaces for thread creation, scheduling policies, and thread state management, allowing different scheduler implementations to be plugged in.
+
+## Overview
+
+`uksched` provides:
+- **Scheduler abstraction** - Common interface for multiple scheduler implementations
+- **Thread creation** - APIs for creating and managing threads
+- **Thread states** - BLOCKED, RUNNABLE, EXITED state management
+- **Yielding** - Voluntary CPU relinquishment
+- **Thread lifecycle** - Creation, execution, termination, and cleanup
+- **Wait queues** - Thread blocking and waking mechanisms
+- **Statistics** - Optional scheduler performance tracking
+
+## Core Data Structures
+
+### Scheduler Structure
+
+```c
+struct uk_sched {
+    uk_sched_yield_func_t yield;
+    uk_sched_thread_add_func_t thread_add;
+    uk_sched_thread_remove_func_t thread_remove;
+    uk_sched_thread_blocked_func_t thread_blocked;
+    uk_sched_thread_woken_func_t thread_woken;
+    uk_sched_thread_woken_func_t thread_woken_isr;
+    uk_sched_idle_thread_func_t idle_thread;
+    uk_sched_start_t sched_start;
+    
+    bool is_started;
+    struct uk_thread_list thread_list;
+    struct uk_thread_list exited_threads;
+    struct uk_alloc *a;
+    struct uk_alloc *a_stack;
+    struct uk_alloc *a_auxstack;
+    struct uk_alloc *a_uktls;
+};
+```
+
+**Location**: `lib/uksched/include/uk/sched.h:89`
+
+### Thread Structure
+
+```c
+struct uk_thread {
+    struct ukarch_ctx ctx;        /* Architecture context */
+    struct ukarch_ectx *ectx;    /* Extended context (FPU, etc.) */
+    uintptr_t tlsp;              /* Current active TLS pointer */
+    __uptr uktlsp;               /* Unikraft TLS pointer */
+    __uptr auxsp;                /* Auxiliary stack pointer */
+    
+    uint32_t flags;
+    __snsec wakeup_time;
+    struct uk_sched *sched;
+    
+    uk_thread_dtor_t dtor;       /* User destructor */
+    void *priv;                  /* Private data */
+    __nsec exec_time;
+    const char *name;
+};
+```
+
+**Location**: `lib/uksched/include/uk/thread.h:58`
+
+## Thread Creation APIs
+
+### Basic Thread Creation
+
+```c
+struct uk_thread *uk_sched_thread_create(struct uk_sched *s,
+                                         uk_thread_fn1_t fn1, 
+                                         void *argp,
+                                         const char *name);
+```
+
+Create a thread with default settings (macro wrapper).
+
+<ParamField path="s" type="struct uk_sched *">
+  Scheduler to assign the thread to
+</ParamField>
+
+<ParamField path="fn1" type="uk_thread_fn1_t">
+  Thread entry function: `void fn1(void *argp) __noreturn`
+</ParamField>
+
+<ParamField path="argp" type="void *">
+  Argument to pass to the thread function
+</ParamField>
+
+<ParamField path="name" type="const char *">
+  Optional thread name (can be NULL)
+</ParamField>
+
+**Returns**: Pointer to created thread or NULL on failure
+
+**Location**: `lib/uksched/include/uk/sched.h:257`
+
+---
+
+### Advanced Thread Creation
+
+```c
+struct uk_thread *uk_sched_thread_create_fn1(struct uk_sched *s,
+                                             uk_thread_fn1_t fn1,
+                                             void *argp,
+                                             size_t stack_len,
+                                             size_t auxstack_len,
+                                             bool no_uktls,
+                                             bool no_ectx,
+                                             const char *name,
+                                             void *priv,
+                                             uk_thread_dtor_t dtor);
+```
+
+Create a thread with custom parameters.
+
+<ParamField path="s" type="struct uk_sched *">
+  Scheduler to assign the thread to (required)
+</ParamField>
+
+<ParamField path="fn1" type="uk_thread_fn1_t">
+  Thread entry function (required)
+</ParamField>
+
+<ParamField path="argp" type="void *">
+  Argument to pass to thread function
+</ParamField>
+
+<ParamField path="stack_len" type="size_t">
+  Stack size in bytes (0 = use default)
+</ParamField>
+
+<ParamField path="auxstack_len" type="size_t">
+  Auxiliary stack size (0 = use default)
+</ParamField>
+
+<ParamField path="no_uktls" type="bool">
+  If true, don't allocate TLS (thread cannot use TLS variables)
+</ParamField>
+
+<ParamField path="no_ectx" type="bool">
+  If true, don't allocate extended context (thread must be ISR-safe)
+</ParamField>
+
+<ParamField path="name" type="const char *">
+  Optional thread name
+</ParamField>
+
+<ParamField path="priv" type="void *">
+  Private data associated with thread
+</ParamField>
+
+<ParamField path="dtor" type="uk_thread_dtor_t">
+  Destructor called when thread is released
+</ParamField>
+
+**Returns**: Pointer to created thread or NULL on failure
+
+**Location**: `lib/uksched/include/uk/sched.h:230`
+
+---
+
+### Thread Creation Variants
+
+```c
+struct uk_thread *uk_sched_thread_create_fn0(struct uk_sched *s,
+                                             uk_thread_fn0_t fn0, ...);
+```
+
+Create thread with function taking no arguments: `void fn0(void) __noreturn`
+
+**Location**: `lib/uksched/include/uk/sched.h:216`
+
+---
+
+```c
+struct uk_thread *uk_sched_thread_create_fn2(struct uk_sched *s,
+                                             uk_thread_fn2_t fn2,
+                                             void *argp0, 
+                                             void *argp1, ...);
+```
+
+Create thread with function taking two arguments: `void fn2(void *argp0, void *argp1) __noreturn`
+
+**Location**: `lib/uksched/include/uk/sched.h:245`
+
+## Thread Management APIs
+
+### Get Current Thread
+
+```c
+struct uk_thread *uk_thread_current(void);
+```
+
+Get the currently executing thread.
+
+**Returns**: Pointer to current thread or NULL if no thread is active
+
+**Location**: `lib/uksched/include/uk/thread.h:102`
+
+---
+
+### Get Current Scheduler
+
+```c
+struct uk_sched *uk_sched_current(void);
+```
+
+Get the scheduler of the currently executing thread.
+
+**Returns**: Pointer to current scheduler or NULL
+
+**Location**: `lib/uksched/include/uk/sched.h:54`
+
+---
+
+### Yield CPU
+
+```c
+void uk_sched_yield(void);
+```
+
+Voluntarily yield the CPU to allow other threads to run.
+
+**Location**: `lib/uksched/include/uk/sched.h:117`
+
+---
+
+### Add Thread to Scheduler
+
+```c
+int uk_sched_thread_add(struct uk_sched *s, struct uk_thread *t);
+```
+
+Add a thread to a scheduler's run queue.
+
+<ParamField path="s" type="struct uk_sched *">
+  Target scheduler
+</ParamField>
+
+<ParamField path="t" type="struct uk_thread *">
+  Thread to add
+</ParamField>
+
+**Returns**: 0 on success, negative error code on failure
+
+**Location**: `lib/uksched/include/uk/sched.h:129`
+
+---
+
+### Remove Thread from Scheduler
+
+```c
+int uk_sched_thread_remove(struct uk_thread *t);
+```
+
+Remove a thread from its scheduler.
+
+**Returns**: 0 on success, negative error code on failure
+
+**Location**: `lib/uksched/include/uk/sched.h:131`
+
+## Thread State Management
+
+### Thread States
+
+Threads can be in one of three states:
+
+1. **BLOCKED** - Thread is waiting for an event
+2. **RUNNABLE** - Thread is ready to run
+3. **EXITED** - Thread has terminated
+
+### State Checking
+
+```c
+bool uk_thread_is_runnable(struct uk_thread *t);
+bool uk_thread_is_blocked(struct uk_thread *t);
+bool uk_thread_is_exited(struct uk_thread *t);
+```
+
+Check thread state.
+
+**Location**: `lib/uksched/include/uk/thread.h:179-184`
+
+---
+
+### State Transitions
+
+```c
+void uk_thread_set_runnable(struct uk_thread *t);
+void uk_thread_set_blocked(struct uk_thread *t);
+```
+
+Manually change thread state (typically used by scheduler implementations).
+
+**Location**: `lib/uksched/include/uk/thread.h:187-190`
+
+---
+
+### Block Thread
+
+```c
+void uk_thread_block(struct uk_thread *thread);
+```
+
+Block a thread indefinitely until woken.
+
+---
+
+```c
+void uk_thread_block_timeout(struct uk_thread *thread, __nsec nsec);
+```
+
+Block a thread for a specified time.
+
+<ParamField path="thread" type="struct uk_thread *">
+  Thread to block
+</ParamField>
+
+<ParamField path="nsec" type="__nsec">
+  Timeout in nanoseconds
+</ParamField>
+
+**Location**: `lib/uksched/include/uk/thread.h:672`
+
+---
+
+### Wake Thread
+
+```c
+void uk_thread_wake(struct uk_thread *thread);
+```
+
+Wake a blocked thread, making it runnable.
+
+**Location**: `lib/uksched/include/uk/thread.h:674`
+
+---
+
+### Thread Sleep
+
+```c
+void uk_sched_thread_sleep(__nsec nsec);
+```
+
+Put the current thread to sleep for the specified duration.
+
+<ParamField path="nsec" type="__nsec">
+  Sleep duration in nanoseconds
+</ParamField>
+
+**Location**: `lib/uksched/include/uk/sched.h:269`
+
+## Thread Termination
+
+### Exit Current Thread
+
+```c
+void uk_sched_thread_exit(void) __noreturn;
+```
+
+Exit the current thread context. The thread transitions to EXITED state and will be cleaned up by the garbage collector.
+
+**Location**: `lib/uksched/include/uk/sched.h:272`
+
+---
+
+### Exit with Callback
+
+```c
+void uk_sched_thread_exit2(uk_thread_gc_t gc_fn, 
+                           void *gc_argp) __noreturn;
+```
+
+Exit and run a callback function during garbage collection.
+
+<ParamField path="gc_fn" type="uk_thread_gc_t">
+  Function to call during thread cleanup: `void gc_fn(struct uk_thread *t, void *argp)`
+</ParamField>
+
+<ParamField path="gc_argp" type="void *">
+  Argument to pass to gc_fn
+</ParamField>
+
+**Location**: `lib/uksched/include/uk/sched.h:277`
+
+---
+
+### Terminate Another Thread
+
+```c
+void uk_sched_thread_terminate(struct uk_thread *thread);
+```
+
+Forcefully terminate another thread.
+
+**Location**: `lib/uksched/include/uk/sched.h:280`
+
+---
+
+### Release Thread Resources
+
+```c
+void uk_thread_release(struct uk_thread *t);
+```
+
+Release all resources associated with a thread. The thread must be in EXITED state.
+
+**Location**: `lib/uksched/include/uk/thread.h:670`
+
+## Thread Initialization Callbacks
+
+Libraries can register callbacks to be notified when threads are created or terminated.
+
+### Callback Types
+
+```c
+typedef int (*uk_thread_init_func_t)(struct uk_thread *child,
+                                     struct uk_thread *parent);
+```
+
+Thread initialization callback. Called when a thread is created.
+
+<ParamField path="child" type="struct uk_thread *">
+  The newly created thread
+</ParamField>
+
+<ParamField path="parent" type="struct uk_thread *">
+  The parent thread (may be NULL during scheduler init)
+</ParamField>
+
+**Returns**:
+- `>= 0` - Success
+- `< 0` - Failure (thread creation aborted)
+
+**Location**: `lib/uksched/include/uk/thread.h:730`
+
+---
+
+```c
+typedef void (*uk_thread_term_func_t)(struct uk_thread *child);
+```
+
+Thread termination callback. Called when a thread transitions to EXITED state.
+
+**Location**: `lib/uksched/include/uk/thread.h:743`
+
+---
+
+### Registration Macros
+
+```c
+UK_THREAD_INIT_PRIO(init_fn, term_fn, prio)
+```
+
+Register thread lifecycle callbacks.
+
+<ParamField path="init_fn" type="uk_thread_init_func_t">
+  Initialization callback
+</ParamField>
+
+<ParamField path="term_fn" type="uk_thread_term_func_t">
+  Termination callback
+</ParamField>
+
+<ParamField path="prio" type="int">
+  Priority (0-9, lower executes first)
+</ParamField>
+
+**Location**: `lib/uksched/include/uk/thread.h:784`
+
+---
+
+```c
+UK_THREAD_INIT(init_fn, term_fn)
+```
+
+Register with default (latest) priority.
+
+**Location**: `lib/uksched/include/uk/thread.h:787`
+
+## Scheduler Lifecycle
+
+### Start Scheduler
+
+```c
+int uk_sched_start(struct uk_sched *sched);
+```
+
+Create a main thread from the current context and start the scheduler.
+
+**Returns**: Does not return on success; negative error code on failure
+
+**Location**: `lib/uksched/include/uk/sched.h:180`
+
+## Configuration Options
+
+### Debug Messages
+
+```kconfig
+config LIBUKSCHED_DEBUG
+    bool "Enable debug messages"
+```
+
+Enable debug output from the scheduler.
+
+### Statistics
+
+```kconfig
+config LIBUKSCHED_STATS
+    bool "Scheduler statistics"
+    depends on LIBUKSTORE
+```
+
+Enable scheduler statistics tracking via ukstore.
+
+When enabled, provides:
+- Schedule count
+- Yield count
+- Idle count
+- Performance metrics
+
+## Usage Examples
+
+### Creating and Running a Thread
+
+```c
+#include <uk/sched.h>
+
+static void my_thread_func(void *arg)
+{
+    const char *name = (const char *)arg;
+    
+    uk_pr_info("Thread %s started\n", name);
+    
+    /* Do some work */
+    for (int i = 0; i < 10; i++) {
+        uk_pr_info("%s: iteration %d\n", name, i);
+        uk_sched_yield();  /* Let other threads run */
+    }
+    
+    uk_pr_info("Thread %s exiting\n", name);
+    uk_sched_thread_exit();
+}
+
+void example_create_thread(void)
+{
+    struct uk_sched *s = uk_sched_current();
+    struct uk_thread *t;
+    
+    t = uk_sched_thread_create(s, my_thread_func, 
+                               (void *)"worker", "worker-thread");
+    if (!t) {
+        uk_pr_err("Failed to create thread\n");
+        return;
+    }
+    
+    /* Thread is automatically added to scheduler */
+}
+```
+
+### Thread with Custom Stack Size
+
+```c
+#include <uk/sched.h>
+
+void example_custom_stack(void)
+{
+    struct uk_sched *s = uk_sched_current();
+    struct uk_thread *t;
+    
+    /* Create thread with 64KB stack */
+    t = uk_sched_thread_create_fn1(
+        s,
+        my_thread_func,
+        NULL,
+        65536,    /* stack_len: 64KB */
+        0,        /* auxstack_len: default */
+        false,    /* no_uktls: false = allocate TLS */
+        false,    /* no_ectx: false = allocate ectx */
+        "big-stack-thread",
+        NULL,     /* priv */
+        NULL      /* dtor */
+    );
+    
+    if (!t) {
+        uk_pr_err("Failed to create thread\n");
+    }
+}
+```
+
+### Thread Sleep and Wake
+
+```c
+#include <uk/sched.h>
+
+static void sleeper_thread(void *arg)
+{
+    uk_pr_info("Going to sleep for 1 second\n");
+    
+    /* Sleep for 1 second (1,000,000,000 nanoseconds) */
+    uk_sched_thread_sleep(1000000000ULL);
+    
+    uk_pr_info("Woke up from sleep\n");
+    uk_sched_thread_exit();
+}
+```
+
+### Thread Lifecycle Callbacks
+
+```c
+#include <uk/sched.h>
+#include <uk/thread.h>
+
+static int my_thread_init(struct uk_thread *child,
+                         struct uk_thread *parent)
+{
+    uk_pr_info("Thread %s being created by %s\n",
+               child->name ? child->name : "<unnamed>",
+               parent ? (parent->name ? parent->name : "<unnamed>")
+                      : "<no parent>");
+    
+    /* Allocate per-thread data */
+    child->priv = uk_malloc(uk_alloc_get_default(), 256);
+    if (!child->priv)
+        return -ENOMEM;
+    
+    return 0;
+}
+
+static void my_thread_term(struct uk_thread *child)
+{
+    uk_pr_info("Thread %s terminating\n",
+               child->name ? child->name : "<unnamed>");
+    
+    /* Free per-thread data */
+    if (child->priv) {
+        uk_free(uk_alloc_get_default(), child->priv);
+        child->priv = NULL;
+    }
+}
+
+UK_THREAD_INIT_PRIO(my_thread_init, my_thread_term, 5);
+```
+
+### Checking Thread State
+
+```c
+#include <uk/sched.h>
+
+void example_thread_state(void)
+{
+    struct uk_thread *t = uk_thread_current();
+    
+    if (uk_thread_is_runnable(t)) {
+        uk_pr_info("Thread is runnable\n");
+    }
+    
+    if (uk_thread_is_blocked(t)) {
+        uk_pr_info("Thread is blocked\n");
+    }
+    
+    if (uk_thread_is_exited(t)) {
+        uk_pr_info("Thread has exited\n");
+    }
+}
+```
+
+## Thread Flags
+
+Thread behavior can be controlled with flags:
+
+- `UK_THREADF_ECTX` - Extended context available
+- `UK_THREADF_AUXSP` - Thread has auxiliary stack
+- `UK_THREADF_UKTLS` - Unikraft allocated TLS
+- `UK_THREADF_RUNNABLE` - Thread is runnable
+- `UK_THREADF_EXITED` - Thread has exited
+- `UK_THREADF_QUEUEABLE` - Thread can be added to run queue
+
+## Dependencies
+
+`uksched` depends on:
+- `LIBNOLIBC` or `HAVE_LIBC` - For basic types
+- `LIBUKDEBUG` - For assertions and debugging
+- `LIBUKALLOC` - For memory allocation
+- `HAVE_SCHED` - Indicates scheduler support is available
+
+## Available Scheduler Implementations
+
+- **ukschedcoop** - Cooperative round-robin scheduler
+
+## See Also
+
+- [ukboot - Boot and Initialization](/libraries/ukboot)
+- [ukalloc - Memory Allocation](/libraries/ukalloc)
+- [uklock - Locking Primitives](/libraries/overview)

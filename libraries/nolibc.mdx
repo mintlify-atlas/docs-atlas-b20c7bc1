@@ -1,0 +1,293 @@
+---
+title: nolibc
+description: Lightweight C standard library implementation for minimal Unikraft applications
+---
+
+## Overview
+
+`nolibc` is Unikraft's lightweight implementation of the C standard library, providing essential libc functionality in a compact package. It's designed for applications that need basic C library support without the overhead of a full libc implementation like musl.
+
+The library remains POSIX-compliant while occupying significantly less memory, making it ideal for simple applications and resource-constrained environments.
+
+## Configuration
+
+### Enabling nolibc
+
+`nolibc` is an internal Unikraft library and is **enabled by default** when configuring a new project. It's automatically overridden if you select a different C standard library implementation (e.g., musl).
+
+To explicitly configure `nolibc`:
+
+1. Enter the configuration interface:
+   ```bash
+   make menuconfig
+   ```
+
+2. Navigate to `Library Configuration`
+
+3. Select `nolibc: Only necessary subset of libc functionality`
+
+4. Configure assertion behavior:
+   - Toggle `Implement assertions with libukdebug` to choose between Unikraft-specific assertions or nolibc assertions
+
+### Configuration Options
+
+The following options are available in `Config.uk`:
+
+- **`LIBNOLIBC_UKDEBUG_ASSERT`**: Map `assert()` to `UK_ASSERT()` for integration with Unikraft's debug infrastructure
+- **`LIBNOLIBC_SYSLOG`**: Include syslog/openlog/closelog implementations using ukdebug
+- **`LIBNOLIBC_FD_SETSIZE`**: Set maximum file descriptors in `fd_set` (default: 64, range: 64-32768)
+
+## Provided Functionality
+
+### Standard I/O (stdio.h)
+
+`nolibc` provides essential formatted I/O functions:
+
+```c
+// Formatted output
+int printf(const char *fmt, ...);
+int fprintf(FILE *fp, const char *fmt, ...);
+int sprintf(char *str, const char *fmt, ...);
+int snprintf(char *str, size_t size, const char *fmt, ...);
+
+// Variadic versions
+int vprintf(const char *fmt, va_list ap);
+int vfprintf(FILE *fp, const char *fmt, va_list ap);
+int vsprintf(char *str, const char *fmt, va_list ap);
+int vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
+
+// Dynamic allocation variants
+int asprintf(char **str, const char *fmt, ...);
+int vasprintf(char **str, const char *fmt, va_list ap);
+
+// Character and string output
+int putchar(int c);
+int puts(const char *s);
+int fputc(int c, FILE *fp);
+int fputs(const char *restrict s, FILE *restrict stream);
+int fflush(FILE *fp);
+
+// Formatted input
+int scanf(const char *fmt, ...);
+int sscanf(const char *str, const char *fmt, ...);
+int fscanf(FILE *fp, const char *fmt, ...);
+int vsscanf(const char *str, const char *fmt, va_list ap);
+```
+
+Standard streams are available:
+```c
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+```
+
+### String Operations (string.h)
+
+Comprehensive string manipulation functions:
+
+```c
+// Memory operations
+void *memcpy(void *dst, const void *src, size_t len);
+void *memset(void *ptr, int val, size_t len);
+void *memmove(void *dst, const void *src, size_t len);
+void *memchr(const void *ptr, int val, size_t len);
+void *memrchr(const void *m, int c, size_t n);
+int memcmp(const void *ptr1, const void *ptr2, size_t len);
+
+// String copying
+char *strcpy(char *dst, const char *src);
+char *strncpy(char *dst, const char *src, size_t len);
+size_t strlcpy(char *d, const char *s, size_t n);
+char *strcat(char *restrict dest, const char *restrict src);
+char *strncat(char *dest, const char *src, size_t n);
+size_t strlcat(char *d, const char *s, size_t n);
+
+// String searching
+char *strchr(const char *str, int c);
+char *strrchr(const char *s, int c);
+char *strchrnul(const char *s, int c);
+char *strstr(const char *h, const char *n);
+
+// String comparison
+int strcmp(const char *str1, const char *str2);
+int strncmp(const char *str1, const char *str2, size_t len);
+int strcasecmp(const char *s1, const char *s2);
+
+// String length and span
+size_t strlen(const char *str);
+size_t strnlen(const char *str, size_t maxlen);
+size_t strcspn(const char *s, const char *c);
+size_t strspn(const char *s, const char *c);
+
+// Tokenization
+char *strtok(char *restrict s, const char *restrict sep);
+char *strtok_r(char *restrict s, const char *restrict sep, char **restrict p);
+char *strsep(char **restrict s, const char *restrict sep);
+
+// String duplication
+char *strdup(const char *str);
+char *strndup(const char *str, size_t len);
+
+// Error strings
+char *strerror(int errnum);
+char *strerror_r(int errnum, char *buf, size_t buflen);
+char *strsignal(int sig);
+
+// BSD compatibility
+void bcopy(const void *from, void *to, size_t len);
+void bzero(void *buf, size_t len);
+int bcmp(const void *s1, const void *s2, size_t n);
+```
+
+### Standard Library (stdlib.h)
+
+Essential utility functions:
+
+```c
+// String to number conversion
+int atoi(const char *s);
+long atol(const char *s);
+long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+long long strtoll(const char *nptr, char **endptr, int base);
+unsigned long long strtoull(const char *nptr, char **endptr, int base);
+
+// Memory management (requires CONFIG_LIBUKALLOC)
+void *malloc(size_t size);
+void free(void *ptr);
+void *calloc(size_t nmemb, size_t size);
+void *realloc(void *ptr, size_t size);
+void *memalign(size_t align, size_t size);
+int posix_memalign(void **memptr, size_t align, size_t size);
+
+// Sorting
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *));
+
+// Random numbers
+void srandom(unsigned int seed);
+long random(void);
+char *initstate(unsigned int seed, char *state, size_t size);
+char *setstate(char *state);
+
+// Program control
+void abort(void) __noreturn;
+void exit(int status) __noreturn;
+
+// Environment variables (requires CONFIG_LIBPOSIX_ENVIRON)
+char *getenv(const char *name);
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
+int clearenv(void);
+int putenv(char *string);
+
+// System commands (requires CONFIG_LIBPOSIX_PROCESS)
+int system(const char *command);
+```
+
+### Other Headers
+
+- **ctype.h**: Character classification and conversion functions
+- **errno.h**: Error number definitions and `errno` variable
+- **getopt.h**: Command-line option parsing (`getopt`, `getopt_long`)
+- **assert.h**: Assertion macros
+- **syslog.h**: System logging (if `CONFIG_LIBNOLIBC_SYSLOG` is enabled)
+
+## Example Application
+
+Here's a simple application demonstrating `nolibc` usage:
+
+```c
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+    char str[1024], *p;
+
+    strcpy(str, "There's the way it ought to be");
+    printf("%s\n", str);
+
+    strcat(str, " and there's the way it is");
+    p = strchr(str, 'b');
+    p += 2;
+    fprintf(stderr, "%s\n", p);
+
+    return 0;
+}
+```
+
+Build and run:
+```bash
+make menuconfig  # Ensure nolibc is selected
+make
+qemu-system-x86_64 -kernel build/app-helloworld_kvm-x86_64 -nographic
+```
+
+## nolibc vs Full libc
+
+### When to Use nolibc
+
+Use `nolibc` for:
+- Simple applications with basic C library needs
+- Memory-constrained environments
+- Fast boot times (smaller binary size)
+- Applications that don't need advanced libc features
+
+### When to Use musl
+
+Switch to [musl](https://github.com/unikraft/lib-musl) for:
+- Complex applications requiring comprehensive libc support
+- Applications using advanced POSIX features
+- Code with dependencies on full libc functionality
+- Network applications requiring complete socket APIs
+
+### Size Comparison
+
+`nolibc` provides a minimal footprint:
+- Core functionality: ~50-100 KB
+- musl (full libc): ~500 KB - 1 MB+
+
+The exact size depends on which functions your application actually uses, as the linker removes unused code.
+
+## Limitations and Caveats
+
+<Warning>
+`nolibc` has several important limitations compared to a full libc implementation:
+
+1. **Limited stdio buffering**: No internal buffering for stdio functions
+2. **fprintf() restrictions**: Only suitable for `stdout` and `stderr`, not other files or devices
+3. **No fscanf derivatives**: Input can only be received from `stdin` - `fscanf()` and related functions are not implemented
+4. **File operations**: Limited file I/O capabilities without VFS support
+5. **VFS dependency**: File operations like `fopen()`, `fread()`, `fwrite()` require `CONFIG_HAVE_VFS` to be enabled
+</Warning>
+
+## Source Code Structure
+
+The `nolibc` implementation is located at `lib/nolibc/` in the Unikraft source tree:
+
+```
+lib/nolibc/
+├── stdio.c          # Formatted I/O implementation
+├── string.c         # String manipulation functions
+├── stdlib.c         # Standard utility functions
+├── ctype.c          # Character classification
+├── getopt.c         # Command-line parsing
+├── errno.c          # Error handling
+├── sscanf.c         # String scanning
+├── scanf.c          # Standard input scanning
+├── qsort.c          # Sorting algorithm
+├── random.c         # Random number generation
+├── syslog.c         # System logging
+└── include/         # Header files
+    ├── stdio.h
+    ├── string.h
+    ├── stdlib.h
+    └── ...
+```
+
+## See Also
+
+- [syscall-shim](/libraries/syscall-shim) - System call interception layer
+- [POSIX Compatibility](/libraries/posix-compatibility) - POSIX compatibility libraries
+- [musl Library](https://github.com/unikraft/lib-musl) - Full libc alternative

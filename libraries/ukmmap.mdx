@@ -1,0 +1,428 @@
+---
+title: ukmmap - Memory Mapping
+description: POSIX mmap/munmap implementation for Unikraft
+---
+
+# Memory Mapping (ukmmap)
+
+The `ukmmap` library provides a POSIX-compatible memory mapping interface for Unikraft. It implements the `mmap()`, `munmap()`, `mremap()`, `madvise()`, and `mprotect()` system calls, enabling applications that rely on memory-mapped I/O and dynamic memory management.
+
+## Overview
+
+This library provides a simplified implementation of memory mapping primarily designed to support runtime environments like Go. The implementation allocates memory using the default allocator and tracks allocations to support subsequent operations.
+
+<Note>
+**Important**: This is not a complete implementation of POSIX mmap. It works for specific use cases (notably Go runtime) but lacks full file mapping and some advanced features. For comprehensive virtual memory management, consider using the `ukvmem` library directly.
+</Note>
+
+## Features
+
+- Anonymous memory mapping (`MAP_ANON`)
+- Private mappings (`MAP_PRIVATE`)
+- Fixed address mappings (`MAP_FIXED`)
+- Non-reserved mappings (`MAP_NORESERVE`)
+- Memory unmapping with tracking
+- Stub implementations for `mremap()`, `madvise()`, and `mprotect()`
+
+## API Reference
+
+### mmap
+
+```c
+void *mmap(void *addr, size_t len, int prot,
+           int flags, int fildes, off_t off);
+```
+
+Maps `len` bytes of memory at the specified address.
+
+**Parameters:**
+- `addr` - Requested starting address (can be `NULL` for automatic selection)
+- `len` - Number of bytes to map (must be > 0)
+- `prot` - Protection flags (see below)
+- `flags` - Mapping flags (see below)
+- `fildes` - File descriptor (must be -1 for anonymous mapping)
+- `off` - File offset (must be 0)
+
+**Protection Flags:**
+- `PROT_NONE` - No access
+- `PROT_READ` - Read access
+- `PROT_WRITE` - Write access
+- `PROT_EXEC` - Execute access
+- Combined: `PROT_READ|PROT_WRITE`
+
+**Mapping Flags:**
+- `MAP_ANON` / `MAP_ANONYMOUS` - Anonymous mapping (not backed by file)
+- `MAP_PRIVATE` - Private copy-on-write mapping
+- `MAP_FIXED` - Place mapping at exact address specified
+- `MAP_NORESERVE` - Don't reserve swap space
+
+**Returns:**
+- On success: Pointer to mapped area
+- On failure: `MAP_FAILED` (cast to `(void *) -1`)
+
+**Errors:** Sets `errno` to:
+- `EINVAL` - Invalid parameters (len is 0)
+- `ENOMEM` - Insufficient memory
+
+**Implementation Details:**
+
+The implementation:
+1. Checks if `addr` belongs to a previously allocated region and returns it if found
+2. Otherwise, allocates a new memory block using `uk_memalign()`
+3. Zeros the allocated memory (required by POSIX)
+4. Tracks the allocation in a linked list for future `munmap()` calls
+
+**Location:** `lib/ukmmap/mmap.c:67`
+
+**Example:**
+```c
+#include <sys/mman.h>
+
+// Allocate anonymous memory
+size_t size = 4096 * 16; // 64KB
+void *addr = mmap(NULL, size,
+                  PROT_READ | PROT_WRITE,
+                  MAP_PRIVATE | MAP_ANON,
+                  -1, 0);
+if (addr == MAP_FAILED) {
+    perror("mmap");
+    return -1;
+}
+
+// Use the memory
+memset(addr, 0, size);
+
+// Unmap when done
+munmap(addr, size);
+```
+
+### munmap
+
+```c
+int munmap(void *addr, size_t len);
+```
+
+Unmaps `len` bytes of memory starting at `addr`.
+
+**Parameters:**
+- `addr` - Starting address of region to unmap
+- `len` - Number of bytes to unmap (must be > 0)
+
+**Returns:**
+- On success: 0
+- On failure: -1 with `errno` set
+
+**Errors:** Sets `errno` to:
+- `EINVAL` - Invalid parameters (len is 0)
+
+**Implementation Details:**
+
+The function searches for the mapped region and:
+- If the entire region is being unmapped, frees the memory and removes tracking
+- If only a partial region is being unmapped, does nothing but returns success (memory leak to maintain compatibility)
+- If no matching region is found, returns success (permissive behavior)
+
+<Warning>
+Partial unmapping is not fully supported. While the function returns success, the memory is not freed if `len` doesn't match the original allocation size. This is a known limitation.
+</Warning>
+
+**Location:** `lib/ukmmap/mmap.c:135`
+
+**Example:**
+```c
+void *addr = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                  MAP_PRIVATE | MAP_ANON, -1, 0);
+
+// ... use the memory ...
+
+// Unmap the entire region
+if (munmap(addr, 4096) < 0) {
+    perror("munmap");
+}
+```
+
+### mremap
+
+```c
+void *mremap(void *old_address, size_t old_size,
+             size_t new_size, int flags, ...);
+```
+
+Remaps or resizes a memory mapping.
+
+<Warning>
+**Stub Implementation**: This function currently returns `NULL` (indicating failure). It is not implemented and provided only for compatibility.
+</Warning>
+
+**Parameters:**
+- `old_address` - Address of existing mapping
+- `old_size` - Current size of mapping
+- `new_size` - Desired new size
+- `flags` - Remap flags
+- `...` - Optional new address for `MREMAP_FIXED`
+
+**Returns:** `NULL` (always fails)
+
+**Location:** `lib/ukmmap/mmap.c:174`
+
+### madvise
+
+```c
+int madvise(void *addr, size_t length, int advice);
+```
+
+Provides advice about memory usage patterns.
+
+<Warning>
+**Stub Implementation**: This function currently does nothing and returns 0. It is provided for compatibility but doesn't optimize memory usage.
+</Warning>
+
+**Parameters:**
+- `addr` - Starting address
+- `length` - Length of region
+- `advice` - Advisory flags (e.g., `MADV_WILLNEED`, `MADV_DONTNEED`)
+
+**Returns:** 0 (always succeeds)
+
+**Location:** `lib/ukmmap/mmap.c:188`
+
+### mprotect
+
+```c
+int mprotect(void *addr, size_t len, int prot);
+```
+
+Changes protection on a region of memory.
+
+<Warning>
+**Stub Implementation**: This function currently does nothing and returns 0. It is provided for compatibility but doesn't change memory protections.
+</Warning>
+
+**Parameters:**
+- `addr` - Starting address
+- `len` - Length of region
+- `prot` - New protection flags (`PROT_*`)
+
+**Returns:** 0 (always succeeds)
+
+**Location:** `lib/ukmmap/mmap.c:194`
+
+## Internal Data Structures
+
+### Memory Region Tracking
+
+```c
+struct mmap_addr {
+    void *begin;              /* Start of allocated region */
+    void *end;                /* End of allocated region */
+    struct mmap_addr *next;   /* Next in linked list */
+};
+```
+
+The library maintains a linked list of all mapped regions to support:
+- Address lookup in subsequent `mmap()` calls
+- Proper cleanup in `munmap()` calls
+- Multiple mappings of the same region (if supported)
+
+## Usage Examples
+
+### Basic Anonymous Mapping
+
+```c
+#include <sys/mman.h>
+#include <stdio.h>
+#include <string.h>
+
+void basic_example(void)
+{
+    size_t size = 4096;
+    
+    // Allocate memory
+    void *ptr = mmap(NULL, size,
+                     PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANON,
+                     -1, 0);
+    
+    if (ptr == MAP_FAILED) {
+        perror("mmap failed");
+        return;
+    }
+    
+    // Memory is zeroed by mmap
+    printf("First byte: %d\n", *(char *)ptr);
+    
+    // Use the memory
+    strcpy(ptr, "Hello, Unikraft!");
+    
+    // Clean up
+    munmap(ptr, size);
+}
+```
+
+### Fixed Address Mapping
+
+```c
+#include <sys/mman.h>
+
+void fixed_mapping_example(void)
+{
+    void *desired_addr = (void *)0x100000000UL;
+    size_t size = 4096;
+    
+    // Try to map at specific address
+    void *ptr = mmap(desired_addr, size,
+                     PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANON | MAP_FIXED,
+                     -1, 0);
+    
+    if (ptr == MAP_FAILED) {
+        perror("Fixed mapping failed");
+        return;
+    }
+    
+    // If successful, ptr == desired_addr
+    assert(ptr == desired_addr);
+    
+    munmap(ptr, size);
+}
+```
+
+### Large Memory Allocation
+
+```c
+#include <sys/mman.h>
+
+void large_allocation_example(void)
+{
+    size_t size = 1024 * 1024 * 10; // 10MB
+    
+    // Allocate large region
+    void *ptr = mmap(NULL, size,
+                     PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANON | MAP_NORESERVE,
+                     -1, 0);
+    
+    if (ptr == MAP_FAILED) {
+        perror("Large allocation failed");
+        return;
+    }
+    
+    // Use the memory (zeros are free)
+    memset(ptr, 0, size);
+    
+    munmap(ptr, size);
+}
+```
+
+### Checking Previous Mappings
+
+```c
+#include <sys/mman.h>
+
+void overlapping_mapping_example(void)
+{
+    size_t size = 4096;
+    
+    // First mapping
+    void *ptr1 = mmap(NULL, size,
+                      PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANON,
+                      -1, 0);
+    
+    // Try to map within the same region
+    void *ptr2 = mmap(ptr1 + 1024, size,
+                      PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANON,
+                      -1, 0);
+    
+    // If ptr1 + 1024 is within an existing mapping,
+    // mmap returns that address
+    printf("ptr1: %p, ptr2: %p\n", ptr1, ptr2);
+    
+    munmap(ptr1, size);
+}
+```
+
+## Integration with Go Runtime
+
+The `ukmmap` library is designed to work with the Go runtime, which has specific requirements:
+
+**Go's mmap usage patterns:**
+- Always passes `prot` as either `PROT_NONE` or `PROT_READ|PROT_WRITE`
+- Always uses `MAP_ANON|MAP_PRIVATE`, `MAP_FIXED|MAP_ANON|MAP_PRIVATE`, or `MAP_NORESERVE|MAP_ANON|MAP_PRIVATE`
+- Always passes `fildes` as -1
+- Always passes `off` as 0
+
+The implementation validates these constraints and returns `MAP_FAILED` if they're not met.
+
+## Limitations
+
+The current implementation has several limitations:
+
+1. **No file-backed mappings**: Only anonymous mappings are supported
+2. **Partial unmapping**: Unmapping part of a region doesn't free memory
+3. **No true protection changes**: `mprotect()` is a stub
+4. **No memory advice**: `madvise()` is a stub
+5. **No remapping**: `mremap()` is not implemented
+6. **No shared mappings**: Only private mappings work
+7. **Limited flags**: Only a subset of standard flags are supported
+
+<Note>
+For applications requiring full virtual memory management capabilities, use the `ukvmem` library directly, which provides comprehensive VMA management, demand paging, and proper memory protection.
+</Note>
+
+## Performance Considerations
+
+### Memory Allocation
+
+`mmap()` internally uses `uk_memalign()` with page alignment, which may have different performance characteristics than direct page allocation. For performance-critical code:
+
+- Consider using `ukvmem` for fine-grained control
+- Batch allocations when possible
+- Reuse mappings instead of frequent map/unmap cycles
+
+### Memory Zeroing
+
+All mapped memory is zeroed by `memset()`, which can be expensive for large allocations. To avoid unnecessary zeroing:
+
+- Reuse existing mappings when possible
+- For read-only data, consider using uninitialized memory patterns with `ukvmem`
+
+### Tracking Overhead
+
+Each mapping adds an entry to the tracking list, which is searched linearly. For applications with many small mappings:
+
+- Consider consolidating allocations
+- Use a custom allocator for small objects
+- Profile mapping/unmapping patterns
+
+## Configuration
+
+The library uses the default Unikraft allocator and page size:
+
+```c
+uk_alloc_get_default()  // Default allocator
+__PAGE_SIZE             // System page size
+```
+
+Ensure your application has sufficient memory available in the default allocator for mappings.
+
+## Comparison with ukvmem
+
+| Feature | ukmmap | ukvmem |
+|---------|--------|--------|
+| POSIX compatibility | Partial | N/A |
+| File-backed mapping | No | Possible with custom VMAs |
+| Demand paging | No | Yes |
+| Memory protection | Stub only | Full support |
+| Address space control | Limited | Complete |
+| Performance overhead | Tracking list | Optimized VMA tree |
+| Use case | Simple porting | System-level control |
+
+For new applications, prefer `ukvmem` for better control and efficiency. Use `ukmmap` when porting existing POSIX applications.
+
+## See Also
+
+- [ukvmem - Virtual Memory Management](/libraries/ukvmem)
+- [allocators - Memory Allocator Implementations](/libraries/allocators)
+- POSIX mmap(2) man page

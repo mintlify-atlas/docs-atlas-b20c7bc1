@@ -1,0 +1,991 @@
+---
+title: Build System
+description: Master Unikraft's Kconfig-based build system and Makefile infrastructure
+---
+
+## Introduction
+
+Unikraft uses a sophisticated build system based on **Kconfig** (Linux kernel's configuration system) and **GNU Make**. This combination provides powerful, fine-grained control over what gets built into your unikernel while maintaining simplicity and flexibility.
+
+<Info>
+The build system is inspired by the Linux kernel's build infrastructure, making it familiar to kernel developers.
+</Info>
+
+## Build System Components
+
+The Unikraft build system consists of three main components:
+
+<CardGroup cols={3}>
+  <Card title="Kconfig" icon="sliders">
+    Configuration system for selecting features and libraries
+  </Card>
+  <Card title="Makefiles" icon="file-code">
+    Build rules and compilation instructions
+  </Card>
+  <Card title="Build Scripts" icon="terminal">
+    Helper scripts for code generation and processing
+  </Card>
+</CardGroup>
+
+## Kconfig: Configuration System
+
+### What is Kconfig?
+
+Kconfig is a configuration language that defines:
+- Available options and features
+- Dependencies between options
+- Default values
+- Help text for users
+
+From `Config.uk:1-5`:
+```kconfig
+#
+# For a description of the syntax of this configuration file,
+# see https://www.kernel.org/doc/Documentation/kbuild/Config.in-language.txt.
+#
+mainmenu "Unikraft/$(UK_FULLVERSION) Configuration"
+```
+
+### Configuration File Structure
+
+Unikraft's main configuration file (`Config.uk`) organizes options into menus:
+
+<Tabs>
+  <Tab title="Architecture Selection">
+    From `Config.uk:39-41`:
+    ```kconfig
+    menu "Architecture Selection"
+        source "$(UK_BASE)/arch/Config.uk"
+    endmenu
+    ```
+    
+    Delegates to `arch/Config.uk` which provides architecture choices:
+    ```kconfig
+    choice
+        prompt "Architecture"
+        default ARCH_ARM_32 if HOST_ARCH = "arm"
+        default ARCH_ARM_64 if HOST_ARCH = "arm64"
+        default ARCH_X86_64
+        
+    config ARCH_X86_64
+        bool "x86 compatible (64 bits)"
+        select LIBISRLIB
+        
+    config ARCH_ARM_64
+        bool "Armv8 compatible (64 bits)"
+        select LIBISRLIB
+    ```
+  </Tab>
+  
+  <Tab title="Platform Configuration">
+    From `Config.uk:43-45`:
+    ```kconfig
+    menu "Platform Configuration"
+        source "$(shell,$(UK_BASE)/support/build/config-submenu.sh ...)"
+    endmenu
+    ```
+    
+    Dynamically generates menu from available platforms (KVM, Xen, etc.).
+  </Tab>
+  
+  <Tab title="Library Configuration">
+    From `Config.uk:51-53`:
+    ```kconfig
+    menu "Library Configuration"
+        source "$(shell,$(UK_BASE)/support/build/config-submenu.sh ...)"
+    endmenu
+    ```
+    
+    Includes all library Config.uk files.
+  </Tab>
+  
+  <Tab title="Build Options">
+    From `Config.uk:59-237`:
+    ```kconfig
+    menu "Build Options"
+    choice
+        prompt "Optimization level"
+        default OPTIMIZE_PERF
+        
+    config OPTIMIZE_NONE
+        bool "No optimizations"
+        
+    config OPTIMIZE_PERF
+        bool "Optimize for performance"
+        
+    config OPTIMIZE_SIZE
+        bool "Optimize for size"
+    endchoice
+    ```
+  </Tab>
+</Tabs>
+
+### Kconfig Option Types
+
+<AccordionGroup>
+  <Accordion title="bool - Boolean Options" icon="toggle-on">
+    Binary yes/no options:
+    
+    ```kconfig
+    config LIBUKBOOT_DEBUG
+        bool "Enable debug messages"
+        default n
+        help
+          Enable verbose debug output from ukboot
+    ```
+    
+    Results in:
+    - `CONFIG_LIBUKBOOT_DEBUG=y` in `.config` if enabled
+    - Undefined or `# CONFIG_LIBUKBOOT_DEBUG is not set` if disabled
+  </Accordion>
+  
+  <Accordion title="int - Integer Options" icon="hashtag">
+    Numeric values:
+    
+    ```kconfig
+    config LIBUKBOOT_MAXNBARGS
+        int "Maximum number of arguments"
+        default 60
+        help
+          Maximum size of argv array
+    ```
+    
+    Results in: `CONFIG_LIBUKBOOT_MAXNBARGS=60`
+  </Accordion>
+  
+  <Accordion title="string - String Options" icon="font">
+    Text values:
+    
+    ```kconfig
+    config UK_NAME
+        string "Image name"
+        default UK_DEFNAME
+        help
+          Name to be used for final image
+    ```
+    
+    Results in: `CONFIG_UK_NAME="myapp"`
+  </Accordion>
+  
+  <Accordion title="hex - Hexadecimal Options" icon="code">
+    Hexadecimal values:
+    
+    ```kconfig
+    config LIBUKBOOT_HEAP_BASE
+        hex "Heap base address"
+        default 0x400000000
+        depends on HAVE_PAGING
+    ```
+    
+    Results in: `CONFIG_LIBUKBOOT_HEAP_BASE=0x400000000`
+  </Accordion>
+  
+  <Accordion title="choice - Multiple Choice" icon="list">
+    Select one from multiple options:
+    
+    ```kconfig
+    choice
+        prompt "Initialize memory allocator"
+        default LIBUKBOOT_INITBBUDDY
+        
+    config LIBUKBOOT_INITBBUDDY
+        bool "Binary buddy allocator"
+        select LIBUKALLOCBBUDDY
+        
+    config LIBUKBOOT_INITREGION
+        bool "Region allocator"
+        select LIBUKALLOCREGION
+    endchoice
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Kconfig Directives
+
+<Tabs>
+  <Tab title="select">
+    **Automatically enable dependencies:**
+    
+    ```kconfig
+    config LIBUKSCHED
+        bool "uksched: Abstraction for schedulers"
+        select LIBUKALLOC  # Always enables LIBUKALLOC
+        select LIBUKDEBUG  # Always enables LIBUKDEBUG
+    ```
+    
+    When `LIBUKSCHED` is enabled, its dependencies are automatically enabled. Users cannot disable them without disabling `LIBUKSCHED`.
+  </Tab>
+  
+  <Tab title="depends on">
+    **Conditional availability:**
+    
+    ```kconfig
+    config LIBUKBOOT_MAINTHREAD
+        bool "Run application main in own thread"
+        depends on LIBUKBOOT_INITSCHED && LIBUKBOOT_INITALLOC
+    ```
+    
+    This option only appears in the menu if both dependencies are met.
+  </Tab>
+  
+  <Tab title="imply">
+    **Weak dependency (suggestion):**
+    
+    ```kconfig
+    config LIBUKBOOT
+        imply LIBUKBOOT_MAINTHREAD if HAVE_SHUTDOWN_DISPATCHER
+    ```
+    
+    Suggests enabling the option by default, but user can still disable it.
+  </Tab>
+  
+  <Tab title="default">
+    **Default value:**
+    
+    ```kconfig
+    config OPTIMIZE_PERF
+        bool "Optimize for performance"
+        default y
+    ```
+    
+    Can be conditional:
+    ```kconfig
+    config ARCH_X86_64
+        default y if HOST_ARCH = "x86"
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration Tools
+
+Unikraft supports multiple configuration interfaces:
+
+<Tabs>
+  <Tab title="menuconfig (TUI)">
+    **Terminal-based interactive menu** (most common):
+    
+    ```bash
+    make menuconfig
+    ```
+    
+    <Frame>
+    ```
+    ┌─────── Unikraft/0.20.0 Configuration ────────┐
+    │  Arrow keys navigate the menu.               │
+    │  <Enter> selects submenus.                   │
+    │  <Y> enables, <N> disables, <M> modules.     │
+    │                                              │
+    │    Architecture Selection  --->              │
+    │    Platform Configuration  --->              │
+    │    Library Configuration  --->               │
+    │    Build Options  --->                       │
+    │                                              │
+    │  <Select>  < Exit >  < Help >                │
+    └──────────────────────────────────────────────┘
+    ```
+    </Frame>
+    
+    Navigation:
+    - Arrow keys: Move through options
+    - Space/Y: Enable option
+    - N: Disable option
+    - Enter: Enter submenu
+    - ?: Show help
+    - /: Search for options
+  </Tab>
+  
+  <Tab title="guiconfig (GUI)">
+    **Graphical configuration tool:**
+    
+    ```bash
+    make guiconfig
+    ```
+    
+    Python-based GUI with search and help features.
+  </Tab>
+  
+  <Tab title="oldconfig (CLI)">
+    **Update configuration non-interactively:**
+    
+    ```bash
+    make oldconfig
+    ```
+    
+    Prompts only for new options not in existing `.config`.
+  </Tab>
+  
+  <Tab title="defconfig">
+    **Load default configuration:**
+    
+    ```bash
+    make defconfig
+    ```
+    
+    Or load from specific file:
+    ```bash
+    make defconfig UK_DEFCONFIG=/path/to/defconfig
+    ```
+  </Tab>
+</Tabs>
+
+### Configuration Output
+
+The configuration process generates several files:
+
+<CodeGroup>
+```bash .config
+# Main configuration file
+CONFIG_UK_FULLVERSION="0.20.0"
+CONFIG_ARCH_X86_64=y
+CONFIG_PLAT_KVM=y
+CONFIG_LIBUKBOOT=y
+CONFIG_LIBUKALLOC=y
+```
+
+```c build/include/uk/bits/config.h
+/* Auto-generated header */
+#define CONFIG_UK_FULLVERSION "0.20.0"
+#define CONFIG_ARCH_X86_64 1
+#define CONFIG_PLAT_KVM 1
+#define CONFIG_LIBUKBOOT 1
+```
+
+```makefile build/kconfig/auto.conf
+# Auto-generated Makefile fragment
+CONFIG_UK_FULLVERSION := 0.20.0
+CONFIG_ARCH_X86_64 := y
+CONFIG_PLAT_KVM := y
+```
+</CodeGroup>
+
+From `Makefile:241-248`:
+```makefile
+KCONFIG_AUTOCONFIG    := $(KCONFIG_DIR)/auto.conf
+KCONFIG_TRISTATE      := $(KCONFIG_DIR)/tristate.config
+KCONFIG_AUTOHEADER    := $(KCONFIG_INCLUDES_DIR)/config.h
+```
+
+## Makefile System
+
+### Makefile Hierarchy
+
+Unikraft's build system uses a hierarchy of Makefiles:
+
+```
+Makefile (main)
+├── support/build/Makefile.rules    # Build rules and functions
+├── support/build/Makefile.build    # Library build rules
+├── support/build/Makefile.clean    # Clean targets
+├── arch/*/Makefile.uk              # Architecture-specific
+├── plat/*/Makefile.uk              # Platform-specific
+└── lib/*/Makefile.uk               # Library-specific
+```
+
+### Main Makefile Structure
+
+From `Makefile`, key sections:
+
+<Tabs>
+  <Tab title="Path Setup">
+    ```makefile
+    # Makefile:118-141
+    # Use current directory as base
+    CONFIG_UK_BASE ?= $(CURDIR)
+    override CONFIG_UK_BASE := $(realpath $(CONFIG_UK_BASE))
+    
+    # parameter A: APP_DIR
+    ifneq ("$(origin A)", "command line")
+    override A := $(CONFIG_UK_BASE)
+    else
+    override A := $(realpath $(A))
+    endif
+    override CONFIG_UK_APP := $(A)
+    
+    # parameter O: BUILD_DIR
+    ifneq ("$(origin O)", "command line")
+    _O := $(APP_BASE)/build
+    else
+    _O := $(realpath $(dir $(O)))/$(notdir $(O))
+    endif
+    BUILD_DIR := $(shell mkdir -p $(_O) && cd $(_O) && pwd)
+    ```
+  </Tab>
+  
+  <Tab title="Compiler Setup">
+    ```makefile
+    # Makefile:640-698
+    CC        := $(CONFIG_CROSS_COMPILE)$(CONFIG_COMPILER)
+    CXX       := $(CPP)
+    AS        := $(CC)
+    AR        := $(CONFIG_CROSS_COMPILE)gcc-ar
+    NM        := $(CONFIG_CROSS_COMPILE)gcc-nm
+    OBJCOPY   := $(CONFIG_CROSS_COMPILE)objcopy
+    STRIP     := $(CONFIG_CROSS_COMPILE)strip
+    ```
+  </Tab>
+  
+  <Tab title="Library Registration">
+    ```makefile
+    # Makefile:729-753
+    # external application
+    ifneq ($(CONFIG_UK_BASE),$(CONFIG_UK_APP))
+    $(eval $(call import_lib,$(CONFIG_UK_APP)));
+    endif
+    
+    # internal libraries
+    $(eval $(call verbose_include,$(CONFIG_UK_BASE)/lib/Makefile.uk))
+    
+    # external libraries
+    $(foreach ITR,$(ELIB_DIR), \
+        $(eval $(call import_lib,$(ITR)));
+    )
+    
+    # architecture library
+    $(eval $(call import_lib,$(CONFIG_UK_BASE)/arch/$(UK_FAMILY)))
+    
+    # platforms
+    $(eval $(call verbose_include,$(CONFIG_UK_BASE)/plat/Makefile.uk))
+    ```
+  </Tab>
+</Tabs>
+
+### Library Makefile Structure
+
+Each library provides a `Makefile.uk` with this pattern:
+
+```makefile
+# Example: lib/ukalloc/Makefile.uk
+
+# Register the library
+$(eval $(call addlib,libukalloc))
+
+# Add source files
+LIBUKALLOC_SRCS-y += $(LIBUKALLOC_BASE)/alloc.c
+
+# Conditional sources
+LIBUKALLOC_SRCS-$(CONFIG_LIBUKALLOC_IFMALLOC) += $(LIBUKALLOC_BASE)/malloc.c
+
+# Add include paths
+CINCLUDES-y += -I$(LIBUKALLOC_BASE)/include
+
+# Add compiler flags
+LIBUKALLOC_CFLAGS-y += -Wno-unused-parameter
+```
+
+### Makefile Variables
+
+<AccordionGroup>
+  <Accordion title="Source Variables" icon="file-code">
+    **Adding source files:**
+    
+    ```makefile
+    LIBMYLIB_SRCS-y += $(LIBMYLIB_BASE)/src/main.c
+    LIBMYLIB_SRCS-y += $(LIBMYLIB_BASE)/src/helper.c
+    
+    # Conditional sources
+    LIBMYLIB_SRCS-$(CONFIG_LIBMYLIB_FEATURE) += $(LIBMYLIB_BASE)/src/feature.c
+    ```
+    
+    The `-y` suffix means "enabled". The variable expands based on Kconfig options.
+  </Accordion>
+  
+  <Accordion title="Include Variables" icon="folder-open">
+    **Adding include paths:**
+    
+    ```makefile
+    # Global includes (all libraries)
+    CINCLUDES-y += -I$(LIBMYLIB_BASE)/include
+    
+    # Library-specific includes
+    LIBMYLIB_CINCLUDES-y += -I$(LIBMYLIB_BASE)/internal
+    ```
+  </Accordion>
+  
+  <Accordion title="Flag Variables" icon="flag">
+    **Compiler and linker flags:**
+    
+    ```makefile
+    # Global C flags
+    CFLAGS-y += -Wall -Werror
+    
+    # Library-specific flags
+    LIBMYLIB_CFLAGS-y += -O3 -funroll-loops
+    
+    # Linker flags
+    LDFLAGS-y += -T $(LIBMYLIB_BASE)/linker.lds
+    ```
+  </Accordion>
+  
+  <Accordion title="Object Variables" icon="cube">
+    **Pre-built objects:**
+    
+    ```makefile
+    # Include pre-built object files
+    LIBMYLIB_OBJS-y += $(LIBMYLIB_BASE)/prebuilt/lib.o
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Build Parameters
+
+The main Makefile supports numerous command-line parameters:
+
+### Essential Parameters
+
+<Tabs>
+  <Tab title="A - Application">
+    **Path to application directory:**
+    
+    ```bash
+    make A=/path/to/app
+    ```
+    
+    From `Makefile:124-141`. Defaults to `CONFIG_UK_BASE` if not specified.
+  </Tab>
+  
+  <Tab title="O - Output">
+    **Path to build directory:**
+    
+    ```bash
+    make O=/path/to/build
+    ```
+    
+    From `Makefile:143-156`. Defaults to `$(A)/build`.
+  </Tab>
+  
+  <Tab title="L - Libraries">
+    **Colon-separated external library paths:**
+    
+    ```bash
+    make L=/path/to/lib1:/path/to/lib2
+    ```
+    
+    From `Makefile:188-200`.
+  </Tab>
+  
+  <Tab title="P - Platforms">
+    **Colon-separated external platform paths:**
+    
+    ```bash
+    make P=/path/to/plat1:/path/to/plat2
+    ```
+    
+    From `Makefile:176-186`.
+  </Tab>
+</Tabs>
+
+### Build Control Parameters
+
+<CodeGroup>
+```bash Verbosity
+# Quiet build (default)
+make V=0
+
+# Verbose build
+make V=1
+
+# Very verbose (show undefined vars)
+make V=2
+```
+
+```bash Configuration
+# Use specific config file
+make C=/path/to/.config
+
+# Set image name
+make N=myimage
+```
+
+```bash Cross-compilation
+# Set cross-compiler prefix
+make CROSS_COMPILE=aarch64-linux-gnu-
+
+# Set compiler
+make COMPILER=clang
+```
+</CodeGroup>
+
+## Build Targets
+
+From `Makefile:1180-1253`, Unikraft provides many build targets:
+
+### Common Targets
+
+<Tabs>
+  <Tab title="all (default)">
+    ```bash
+    make all  # or just: make
+    ```
+    
+    Builds everything: libraries, kernel image, debug helpers.
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```bash
+    make menuconfig  # Interactive configuration
+    make defconfig   # Load default config
+    make oldconfig   # Update config
+    ```
+  </Tab>
+  
+  <Tab title="Building">
+    ```bash
+    make fetch      # Fetch external sources
+    make prepare    # Prepare build environment
+    make libs       # Build libraries only
+    make images     # Build kernel images
+    ```
+  </Tab>
+  
+  <Tab title="Cleaning">
+    ```bash
+    make clean          # Remove built files
+    make clean-libs     # Clean libraries only
+    make properclean    # Remove build directory
+    make distclean      # Remove build dir and config
+    ```
+  </Tab>
+</Tabs>
+
+### Information Targets
+
+<CodeGroup>
+```bash Library Information
+# Print enabled libraries
+make print-libs
+
+# Print library source files
+make print-srcs
+
+# Print library object files
+make print-objs
+
+# Print linker scripts
+make print-lds
+```
+
+```bash Build Information
+# Print Unikraft version
+make print-version
+
+# Print all Makefile variables
+make print-vars
+
+# Print lines of code statistics
+make print-loc
+```
+</CodeGroup>
+
+## Build Process
+
+The build follows this sequence:
+
+<Steps>
+  <Step title="Configuration">
+    Load and parse `.config` file, generating:
+    - `auto.conf` (Makefile fragment)
+    - `config.h` (C header)
+    - `tristate.config` (tristate values)
+  </Step>
+  
+  <Step title="Preparation">
+    From `Makefile:805-806`:
+    ```makefile
+    prepare: $(KCONFIG_AUTOHEADER) $(UK_CONFIG_OUT) $(UK_PREPARE) $(UK_PREPARE-y)
+    prepare: $(UK_FIXDEP) | fetch
+    ```
+    
+    - Build configuration tools
+    - Create output directories
+    - Fetch external dependencies
+  </Step>
+  
+  <Step title="Preprocessing">
+    From `Makefile:808`:
+    ```makefile
+    preprocess: $(UK_PREPROCESS) $(UK_PREPROCESS-y) | prepare
+    ```
+    
+    Run any preprocessing steps (code generation, etc.).
+  </Step>
+  
+  <Step title="Compilation">
+    From `Makefile:810-812`:
+    ```makefile
+    objs: $(UK_OBJS) $(UK_OBJS-y)
+    libs: $(UK_ALIBS) $(UK_ALIBS-y) $(UK_OLIBS) $(UK_OLIBS-y)
+    ```
+    
+    - Compile source files to object files
+    - Create library archives
+  </Step>
+  
+  <Step title="Linking">
+    From `Makefile:814-826`:
+    ```makefile
+    images: $(UK_DEBUG_IMAGES) $(UK_DEBUG_IMAGES-y) $(UK_IMAGES) $(UK_IMAGES-y)
+    ```
+    
+    Link libraries into final kernel image(s).
+  </Step>
+  
+  <Step title="Debug Helpers">
+    ```makefile
+    gdb_helpers: $(GDB_HELPER_LINKS) $(BUILD_DIR)/uk-gdb.py
+    ```
+    
+    Generate GDB helper scripts for debugging.
+  </Step>
+</Steps>
+
+## Build System Features
+
+### Dependency Tracking
+
+The build system tracks dependencies automatically:
+
+```makefile
+# From Makefile:897-901
+$(UK_FIXDEP):
+    $(call verbose_cmd,MAKE,$(notdir $(@)),$(MAKE) \
+        CC="$(HOSTCC_NOCCACHE)" HOSTCC="$(HOSTCC_NOCCACHE)" \
+        obj=$(@D) -C $(CONFIG) -f Makefile.br $(@))
+```
+
+`fixdep` tool parses C files and generates dependency information, ensuring rebuilds when headers change.
+
+### Optimization Options
+
+From `Config.uk:60-80`, multiple optimization levels:
+
+<Tabs>
+  <Tab title="Performance">
+    ```kconfig
+    config OPTIMIZE_PERF
+        bool "Optimize for performance"
+        help
+          Optimize code for performance
+    ```
+    
+    Uses `-O2` or `-O3` with platform-specific optimizations.
+  </Tab>
+  
+  <Tab title="Size">
+    ```kconfig
+    config OPTIMIZE_SIZE
+        bool "Optimize for size"
+        help
+          Optimize code for size.
+    ```
+    
+    Uses `-Os` to minimize binary size.
+  </Tab>
+  
+  <Tab title="None">
+    ```kconfig
+    config OPTIMIZE_NONE
+        bool "No optimizations"
+        help
+          Do not optimize, use -O0.
+    ```
+    
+    Useful for debugging.
+  </Tab>
+  
+  <Tab title="Advanced">
+    ```kconfig
+    config OPTIMIZE_LTO
+        bool "LTO - Link time optimizations (EXPERIMENTAL)"
+        help
+          Enables GCC to do code optimizations during linking.
+    
+    config OPTIMIZE_DEADELIM
+        bool "Drop unused functions and data"
+        help
+          Drop unused functions and data.
+    ```
+  </Tab>
+</Tabs>
+
+### Debug Options
+
+From `Config.uk:124-155`:
+
+<AccordionGroup>
+  <Accordion title="Debug Symbols">
+    ```kconfig
+    choice
+        prompt "Debug information level"
+        default DEBUG_SYMBOLS_LVL3
+        
+    config DEBUG_SYMBOLS_LVL0
+        bool "Level 0 (-g0), None"
+        
+    config DEBUG_SYMBOLS_LVL3
+        bool "Level 3 (-g3)"
+        help
+          Includes extra information, such as all macro definitions
+    endchoice
+    ```
+  </Accordion>
+  
+  <Accordion title="Frame Pointers">
+    ```kconfig
+    config OPTIMIZE_NOOMITFP
+        bool "Keep stack frame pointers"
+        default y
+        help
+          Simplifies doing stack walks for debugging
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Features
+
+### Cross-Compilation
+
+From `Makefile:612-634`:
+
+```makefile
+ifneq ("$(origin CROSS_COMPILE)","undefined")
+    CONFIG_CROSS_COMPILE := $(CROSS_COMPILE:"%"=%)
+endif
+
+CC := $(CONFIG_CROSS_COMPILE)$(CONFIG_COMPILER)
+AR := $(CONFIG_CROSS_COMPILE)gcc-ar
+```
+
+Example:
+```bash
+# Cross-compile for ARM64
+make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64
+```
+
+### Position-Independent Binaries
+
+From `Config.uk:113-121`:
+
+```kconfig
+config OPTIMIZE_PIE
+    bool "Static-PIE - Position-independent binary"
+    select LIBUKRELOC
+    help
+      Creates a position independent binary. Such a Unikernel binary does
+      not have to be placed at a fixed location in the virtual address space.
+```
+
+### Build Time Tracking
+
+From `Config.uk:185-211`:
+
+```kconfig
+config RECORD_BUILDTIME
+    bool "Keep track of Building time"
+    help
+      Record time (and resources) used by each build step
+```
+
+Integrates with `time` or `liftoff` to track build performance.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Out-of-Tree Builds" icon="folder-tree">
+    ```bash
+    mkdir build
+    make O=build menuconfig
+    make O=build
+    ```
+    Keeps source tree clean.
+  </Card>
+  
+  <Card title="Save Configurations" icon="save">
+    ```bash
+    make savedefconfig UK_DEFCONFIG=myconfig
+    # Later:
+    make defconfig UK_DEFCONFIG=myconfig
+    ```
+    Version control your configs.
+  </Card>
+  
+  <Card title="Use Verbose Mode" icon="terminal">
+    ```bash
+    make V=1
+    ```
+    See exact commands for debugging.
+  </Card>
+  
+  <Card title="Parallel Builds" icon="tasks">
+    ```bash
+    make -j$(nproc)
+    ```
+    Speed up compilation.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Config Option Not Appearing" icon="question">
+    Check dependencies with `depends on`. The option may be hidden because dependencies aren't met.
+    
+    Use `/` in menuconfig to search for options and see why they're hidden.
+  </Accordion>
+  
+  <Accordion title="Link Errors" icon="link">
+    Missing library? Check with:
+    ```bash
+    make print-libs
+    ```
+    
+    Ensure required libraries are selected in configuration.
+  </Accordion>
+  
+  <Accordion title="Undefined Symbols" icon="exclamation">
+    Check `exportsyms.uk` files. Symbols must be explicitly exported.
+  </Accordion>
+  
+  <Accordion title="Build Fails After Config Change" icon="sync">
+    Try:
+    ```bash
+    make clean
+    make
+    ```
+    
+    Or for a fresh start:
+    ```bash
+    make properclean
+    make menuconfig
+    make
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+Now that you understand the build system:
+
+<CardGroup cols={2}>
+  <Card title="Build Your First App" icon="rocket" href="/getting-started/first-app">
+    Put your knowledge into practice
+  </Card>
+  <Card title="Advanced Configuration" icon="cog" href="/guides/configuration">
+    Master advanced build options
+  </Card>
+  <Card title="Custom Libraries" icon="puzzle-piece" href="/guides/custom-libraries">
+    Create your own libraries
+  </Card>
+  <Card title="Debugging" icon="bug" href="/guides/debugging">
+    Debug your unikernels
+  </Card>
+</CardGroup>
+
+## Reference
+
+<Card title="Build System Help" icon="question-circle">
+```bash
+make help
+```
+
+Shows all available targets and parameters with descriptions.
+</Card>

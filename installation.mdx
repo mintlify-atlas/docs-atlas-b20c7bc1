@@ -1,0 +1,589 @@
+---
+title: "Installation"
+description: "Install the kraft CLI companion tool on macOS, Linux, Windows, and container environments"
+---
+
+## Overview
+
+The `kraft` CLI is the companion command-line tool for building, running, and managing Unikraft unikernels. This guide covers installation across all supported platforms and environments.
+
+<Note>
+Kraft requires a Unix-like environment. Windows users should use WSL2 (Windows Subsystem for Linux).
+</Note>
+
+## Quick Install
+
+The easiest way to install kraft is using the interactive installer:
+
+```bash
+curl -sSfL https://get.kraftkit.sh | sh
+```
+
+This installer:
+
+- Detects your operating system and architecture
+- Downloads the appropriate kraft binary
+- Installs it to your PATH
+- Verifies the installation
+
+<Tip>
+The installer is non-interactive by default. It will install kraft to `/usr/local/bin` or `~/.local/bin` depending on your permissions.
+</Tip>
+
+## Platform-Specific Installation
+
+<Tabs>
+  <Tab title="macOS">
+    ### Using Homebrew (Recommended)
+    
+    The recommended method for macOS is using Homebrew:
+    
+    ```bash
+    brew install unikraft/cli/kraftkit
+    ```
+    
+    This will:
+    - Install kraft and all dependencies
+    - Add kraft to your PATH automatically
+    - Keep kraft updated with `brew upgrade`
+    
+    ### Verify Installation
+    
+    ```bash
+    kraft version
+    ```
+    
+    ### Prerequisites
+    
+    For running unikernels locally, you'll need QEMU:
+    
+    ```bash
+    brew install qemu
+    ```
+    
+    <Note>
+    On Apple Silicon Macs (M1/M2/M3), kraft can run both ARM64 and x86_64 unikernels through QEMU's emulation.
+    </Note>
+  </Tab>
+  
+  <Tab title="Linux">
+    ### Using the Interactive Installer
+    
+    The recommended method for all Linux distributions:
+    
+    ```bash
+    curl -sSfL https://get.kraftkit.sh | sh
+    ```
+    
+    ### Debian/Ubuntu
+    
+    For Debian-based distributions, you can also install from the package repository:
+    
+    ```bash
+    # Add the Unikraft repository
+    curl -sSfL https://get.kraftkit.sh/deb/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/unikraft-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/unikraft-archive-keyring.gpg] https://get.kraftkit.sh/deb stable main" | sudo tee /etc/apt/sources.list.d/unikraft.list
+    
+    # Install kraft
+    sudo apt-get update
+    sudo apt-get install kraftkit
+    ```
+    
+    ### Fedora/RHEL
+    
+    Use the interactive installer or download the binary directly from the [releases page](https://github.com/unikraft/kraftkit/releases).
+    
+    ### Arch Linux
+    
+    Use the interactive installer or install from the AUR:
+    
+    ```bash
+    yay -S kraftkit-bin
+    ```
+    
+    ### Prerequisites
+    
+    Install QEMU for local execution:
+    
+    <CodeGroup>
+    ```bash Debian/Ubuntu
+    sudo apt-get install qemu-system-x86 qemu-system-arm qemu-kvm
+    ```
+    
+    ```bash Fedora/RHEL
+    sudo dnf install qemu qemu-kvm
+    ```
+    
+    ```bash Arch Linux
+    sudo pacman -S qemu qemu-arch-extra
+    ```
+    </CodeGroup>
+    
+    <Tip>
+    For better performance, enable KVM if your system supports hardware virtualization:
+    
+    ```bash
+    # Check if KVM is available
+    lsmod | grep kvm
+    
+    # Add your user to the kvm group
+    sudo usermod -aG kvm $USER
+    ```
+    
+    Log out and back in for the group change to take effect.
+    </Tip>
+  </Tab>
+  
+  <Tab title="Windows">
+    ### Using WSL2 (Required)
+    
+    Kraft requires a Unix-like environment. Install WSL2 first:
+    
+    <Steps>
+      <Step title="Install WSL2">
+        Open PowerShell as Administrator and run:
+        
+        ```powershell
+        wsl --install
+        ```
+        
+        This installs WSL2 with Ubuntu by default.
+      </Step>
+      
+      <Step title="Restart your computer">
+        Restart Windows to complete the WSL2 installation.
+      </Step>
+      
+      <Step title="Open WSL2">
+        Launch Ubuntu from the Start menu or run `wsl` in PowerShell.
+      </Step>
+      
+      <Step title="Install kraft">
+        Inside WSL2, run the interactive installer:
+        
+        ```bash
+        curl -sSfL https://get.kraftkit.sh | sh
+        ```
+      </Step>
+    </Steps>
+    
+    ### Prerequisites in WSL2
+    
+    Install QEMU for local execution:
+    
+    ```bash
+    sudo apt-get update
+    sudo apt-get install qemu-system-x86 qemu-system-arm
+    ```
+    
+    <Warning>
+    Hardware virtualization (KVM) may not be available in WSL2 depending on your Windows version. Unikernels will run using QEMU's TCG emulation, which is slower but functional.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Container">
+    ### Docker Container
+    
+    Run kraft in a pre-built container environment with all dependencies:
+    
+    ```bash
+    docker run --platform linux/x86_64 -it --rm \
+      -v $(pwd):/workspace \
+      --entrypoint bash \
+      kraftkit.sh/base:latest
+    ```
+    
+    This container includes:
+    - kraft CLI pre-installed
+    - QEMU for emulation
+    - Build tools and dependencies
+    - GCC and other compilers
+    
+    <Note>
+    The container mounts your current directory to `/workspace`. Navigate there to access your files:
+    
+    ```bash
+    cd /workspace
+    kraft run .
+    ```
+    </Note>
+    
+    ### Persistent Container
+    
+    For a persistent development environment:
+    
+    ```bash
+    docker run --platform linux/x86_64 -d \
+      --name unikraft-dev \
+      -v $(pwd):/workspace \
+      kraftkit.sh/base:latest \
+      sleep infinity
+    
+    # Attach to the container
+    docker exec -it unikraft-dev bash
+    ```
+  </Tab>
+</Tabs>
+
+## GitHub Codespaces
+
+Try Unikraft without installing anything locally using GitHub Codespaces:
+
+<Card title="Open in GitHub Codespaces" icon="github" href="https://codespaces.new/unikraft/catalog">
+  Launch a pre-configured development environment with kraft and all examples
+</Card>
+
+Codespaces provides:
+- kraft CLI pre-installed
+- VS Code in your browser
+- All example applications from the catalog
+- QEMU for local testing
+
+<Tip>
+Codespaces offers 60 hours of free usage per month for personal accounts.
+</Tip>
+
+## Verify Installation
+
+After installation, verify that kraft is working correctly:
+
+```bash
+kraft version
+```
+
+Expected output:
+
+```bash
+kraft 0.7.0 ()
+```
+
+### Test with Hello World
+
+Run a simple unikernel to confirm everything is working:
+
+```bash
+kraft run unikraft.org/helloworld:latest
+```
+
+You should see:
+
+```bash
+[    0.000000] Info: [libkvmplat] <setup.c @  346> Entering from KVM (x86)...
+[    0.000000] Info: [libukboot] <boot.c @  128> Unikraft 0.20.0~kiviuq
+Hello, World!
+[    0.005492] Info: [libukboot] <boot.c @  175> Unikraft halted
+```
+
+## Manual Installation
+
+If you prefer to install kraft manually or the installer doesn't work on your system:
+
+<Steps>
+  <Step title="Download the binary">
+    Download the appropriate binary for your platform from the [releases page](https://github.com/unikraft/kraftkit/releases):
+    
+    ```bash
+    # Linux x86_64
+    wget https://github.com/unikraft/kraftkit/releases/latest/download/kraft_linux_amd64
+    
+    # Linux ARM64
+    wget https://github.com/unikraft/kraftkit/releases/latest/download/kraft_linux_arm64
+    
+    # macOS x86_64
+    wget https://github.com/unikraft/kraftkit/releases/latest/download/kraft_darwin_amd64
+    
+    # macOS ARM64 (Apple Silicon)
+    wget https://github.com/unikraft/kraftkit/releases/latest/download/kraft_darwin_arm64
+    ```
+  </Step>
+  
+  <Step title="Make it executable">
+    ```bash
+    chmod +x kraft_*
+    ```
+  </Step>
+  
+  <Step title="Move to PATH">
+    ```bash
+    # System-wide installation (requires sudo)
+    sudo mv kraft_* /usr/local/bin/kraft
+    
+    # User installation
+    mkdir -p ~/.local/bin
+    mv kraft_* ~/.local/bin/kraft
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+  </Step>
+  
+  <Step title="Verify">
+    ```bash
+    kraft version
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+Kraft stores its configuration in `~/.config/kraftkit/config.yaml`. You can customize various settings:
+
+```yaml
+log_level: info
+log_type: fancy
+no_check_updates: false
+containerd_addr: unix:///run/containerd/containerd.sock
+events_pid_check_interval: 1s
+```
+
+<Tip>
+Most users don't need to modify the default configuration. Kraft works well out of the box.
+</Tip>
+
+## Advanced Installation Options
+
+### Building from Source
+
+For development or cutting-edge features, build kraft from source:
+
+```bash
+git clone https://github.com/unikraft/kraftkit.git
+cd kraftkit
+make kraft
+sudo make install
+```
+
+Prerequisites:
+- Go 1.21 or later
+- Make
+- Git
+
+### Using a Specific Version
+
+Install a specific version of kraft:
+
+```bash
+curl -sSfL https://get.kraftkit.sh | sh -s -- --version v0.7.0
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="kraft: command not found">
+    The kraft binary is not in your PATH. 
+    
+    **Solution:**
+    
+    Add the installation directory to your PATH:
+    
+    ```bash
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+    
+    Or for system-wide installation, ensure `/usr/local/bin` is in your PATH.
+  </Accordion>
+  
+  <Accordion title="Permission denied when running kraft">
+    The kraft binary doesn't have execute permissions.
+    
+    **Solution:**
+    
+    ```bash
+    chmod +x $(which kraft)
+    ```
+  </Accordion>
+  
+  <Accordion title="QEMU not found">
+    Kraft cannot find QEMU for local execution.
+    
+    **Solution:**
+    
+    Install QEMU using your package manager:
+    
+    ```bash
+    # macOS
+    brew install qemu
+    
+    # Debian/Ubuntu
+    sudo apt-get install qemu-system-x86 qemu-system-arm
+    
+    # Fedora/RHEL
+    sudo dnf install qemu
+    ```
+  </Accordion>
+  
+  <Accordion title="KVM permission denied on Linux">
+    Your user doesn't have permission to access KVM.
+    
+    **Solution:**
+    
+    Add your user to the `kvm` group:
+    
+    ```bash
+    sudo usermod -aG kvm $USER
+    ```
+    
+    Log out and log back in for the change to take effect.
+  </Accordion>
+  
+  <Accordion title="Network connectivity issues in WSL2">
+    WSL2 networking can sometimes be restrictive.
+    
+    **Solution:**
+    
+    Ensure Windows Firewall allows WSL2 network access. You may need to create firewall rules for QEMU and kraft.
+  </Accordion>
+  
+  <Accordion title="Apple Silicon (M1/M2/M3) compatibility">
+    Some pre-built images are x86_64 only.
+    
+    **Solution:**
+    
+    Kraft automatically uses QEMU emulation for x86_64 images on ARM64 Macs. This works but is slower. For better performance, use ARM64-native images when available:
+    
+    ```bash
+    kraft pkg ls --update --apps --arch arm64
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Updating Kraft
+
+Keep kraft up to date to get the latest features and bug fixes:
+
+<Tabs>
+  <Tab title="Homebrew">
+    ```bash
+    brew upgrade unikraft/cli/kraftkit
+    ```
+  </Tab>
+  
+  <Tab title="Debian/Ubuntu">
+    ```bash
+    sudo apt-get update
+    sudo apt-get upgrade kraftkit
+    ```
+  </Tab>
+  
+  <Tab title="Interactive Installer">
+    ```bash
+    curl -sSfL https://get.kraftkit.sh | sh
+    ```
+    
+    The installer will detect the existing installation and upgrade it.
+  </Tab>
+  
+  <Tab title="Manual">
+    Download the latest binary and replace the existing one:
+    
+    ```bash
+    wget https://github.com/unikraft/kraftkit/releases/latest/download/kraft_linux_amd64
+    chmod +x kraft_linux_amd64
+    sudo mv kraft_linux_amd64 /usr/local/bin/kraft
+    ```
+  </Tab>
+</Tabs>
+
+## Uninstalling Kraft
+
+To remove kraft from your system:
+
+<Tabs>
+  <Tab title="Homebrew">
+    ```bash
+    brew uninstall kraftkit
+    ```
+  </Tab>
+  
+  <Tab title="Debian/Ubuntu">
+    ```bash
+    sudo apt-get remove kraftkit
+    ```
+  </Tab>
+  
+  <Tab title="Manual">
+    ```bash
+    # Remove the binary
+    sudo rm /usr/local/bin/kraft
+    # or
+    rm ~/.local/bin/kraft
+    
+    # Remove configuration
+    rm -rf ~/.config/kraftkit
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+Now that you have kraft installed, you're ready to start building and running unikernels:
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start Guide"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Run your first unikernel in under 5 minutes
+  </Card>
+  
+  <Card
+    title="Example Projects"
+    icon="folder-open"
+    href="https://github.com/unikraft/catalog/tree/main/examples"
+  >
+    Browse starter examples in multiple languages
+  </Card>
+  
+  <Card
+    title="Kraftfile Reference"
+    icon="file-code"
+    href="https://unikraft.org/docs/cli/reference/kraftfile/latest"
+  >
+    Learn the Kraftfile syntax for building custom unikernels
+  </Card>
+  
+  <Card
+    title="CLI Documentation"
+    icon="terminal"
+    href="https://unikraft.org/docs/cli"
+  >
+    Explore all kraft CLI commands and options
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+<CardGroup cols={2}>
+  <Card
+    title="Unikraft Documentation"
+    icon="book"
+    href="https://unikraft.org/docs"
+  >
+    Comprehensive guides and reference documentation
+  </Card>
+  
+  <Card
+    title="Community Discord"
+    icon="discord"
+    href="https://unikraft.org/discord"
+  >
+    Get help and connect with the community
+  </Card>
+  
+  <Card
+    title="GitHub Repository"
+    icon="github"
+    href="https://github.com/unikraft/kraftkit"
+  >
+    Contribute to kraft development
+  </Card>
+  
+  <Card
+    title="Report Issues"
+    icon="bug"
+    href="https://github.com/unikraft/kraftkit/issues"
+  >
+    Report bugs or request features
+  </Card>
+</CardGroup>

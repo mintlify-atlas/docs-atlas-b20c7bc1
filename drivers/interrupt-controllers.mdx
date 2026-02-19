@@ -1,0 +1,539 @@
+---
+title: Interrupt Controller Drivers
+description: Hardware interrupt controller drivers for ARM and x86 architectures
+---
+
+# Interrupt Controller Drivers
+
+Interrupt controllers are critical hardware components that manage interrupt requests (IRQs) from devices to the CPU. Unikraft provides drivers for standard interrupt controllers on ARM and x86 platforms.
+
+## Interrupt Architecture
+
+Unikraft's interrupt handling is layered:
+
+1. **Hardware Layer** - Physical interrupt controller (GIC, xPIC)
+2. **Driver Layer** - `ukintctlr` drivers (this document)
+3. **Abstraction Layer** - `libukintctlr` API
+4. **Device Layer** - Device-specific interrupt handlers
+
+## ARM Generic Interrupt Controller (GIC)
+
+The GIC is the standard interrupt controller for ARM systems. Unikraft supports both GICv2 and GICv3.
+
+### GIC Architecture
+
+The GIC has two main components:
+
+- **Distributor (GICD)** - Distributes interrupts to CPU interfaces
+- **CPU Interface (GICC/GICR)** - Per-CPU interrupt handling
+
+**Interrupt Types:**
+- **SGI** (Software Generated Interrupts) - IRQ 0-15
+- **PPI** (Private Peripheral Interrupts) - IRQ 16-31  
+- **SPI** (Shared Peripheral Interrupts) - IRQ 32+
+
+### GICv2 Driver
+
+**Configuration:**
+```kconfig
+CONFIG_LIBUKINTCTLR_GICV2=y
+CONFIG_LIBUKINTCTLR_GIC=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_ARCH_ARM_64=y
+CONFIG_LIBUKBITOPS=y
+```
+
+**Hardware Requirements:**
+- ARM Cortex-A CPUs with GICv2
+- Memory-mapped register access
+
+**Device Tree:**
+
+GICv2 devices are discovered via FDT:
+
+```dts
+intc: interrupt-controller@8000000 {
+    compatible = "arm,cortex-a15-gic", "arm,gic-400";
+    #interrupt-cells = <3>;
+    interrupt-controller;
+    reg = <0x08000000 0x1000>,   /* Distributor */
+          <0x08010000 0x2000>;   /* CPU interface */
+};
+```
+
+**Register Map:**
+- GICD base: Distributor registers
+- GICC base: CPU interface registers
+
+**QEMU Example:**
+```bash
+qemu-system-aarch64 \
+    -machine virt \              # Uses GICv2 by default
+    -cpu cortex-a57 \
+    -kernel unikernel.elf
+```
+
+**Source:** `drivers/ukintctlr/gic/gic-v2.c`
+
+### GICv3 Driver
+
+GICv3 introduces redistributors and system registers for better scalability.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBUKINTCTLR_GICV3=y
+CONFIG_LIBUKINTCTLR_GIC=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_ARCH_ARM_64=y
+CONFIG_LIBUKBITOPS=y
+```
+
+**Features:**
+- System register interface
+- Better multi-core scalability
+- Locality-specific Peripheral Interrupts (LPI)
+- Message-based interrupts
+
+**Device Tree:**
+
+```dts
+intc: interrupt-controller@8000000 {
+    compatible = "arm,gic-v3";
+    #interrupt-cells = <3>;
+    interrupt-controller;
+    reg = <0x08000000 0x10000>,    /* Distributor */
+          <0x080A0000 0xF60000>;   /* Redistributor */
+};
+```
+
+**Register Map:**
+- GICD base: Distributor registers
+- GICR base: Redistributor registers (per-CPU)
+
+**QEMU Example:**
+```bash
+qemu-system-aarch64 \
+    -machine virt,gic-version=3 \  # Force GICv3
+    -cpu cortex-a57 \
+    -kernel unikernel.elf
+```
+
+**Source:** `drivers/ukintctlr/gic/gic-v3.c`
+
+### GIC API Usage
+
+#### Interrupt Registration
+
+```c
+#include <uk/intctlr.h>
+
+// Define interrupt handler
+static int my_irq_handler(void *arg)
+{
+    // Handle interrupt
+    return UK_EVENT_HANDLED;
+}
+
+// Register interrupt
+int irq = 33;  // SPI 1 (32 + 1)
+int rc = uk_intctlr_irq_register(irq, my_irq_handler, device_data);
+if (rc < 0) {
+    uk_pr_err("Failed to register IRQ %d\n", irq);
+}
+```
+
+#### Interrupt Control
+
+```c
+#include <uk/intctlr.h>
+
+// Enable interrupt
+uk_intctlr_irq_enable(irq);
+
+// Disable interrupt
+uk_intctlr_irq_disable(irq);
+
+// Set interrupt priority (0-255, lower = higher priority)
+uk_intctlr_irq_set_priority(irq, 128);
+
+// Set interrupt affinity (CPU mask)
+uk_intctlr_irq_set_affinity(irq, cpu_mask);
+```
+
+#### Interrupt Acknowledgment
+
+```c
+static int my_irq_handler(void *arg)
+{
+    // Handle interrupt
+    process_device_event();
+    
+    // Acknowledge interrupt (done automatically by framework)
+    uk_intctlr_irq_ack(irq);
+    
+    return UK_EVENT_HANDLED;
+}
+```
+
+### GIC Configuration
+
+**Priority Levels:**
+
+GIC supports 256 priority levels (0-255):
+- 0 = highest priority
+- 255 = lowest priority
+
+Group priorities into bands:
+```c
+#define IRQ_PRIORITY_HIGH    0x00
+#define IRQ_PRIORITY_NORMAL  0x80
+#define IRQ_PRIORITY_LOW     0xF0
+```
+
+**Trigger Types:**
+
+Interrupts can be level-sensitive or edge-triggered:
+
+```dts
+interrupts = <0 33 4>;  /* SPI 33, IRQ_TYPE_LEVEL_HIGH */
+interrupts = <0 34 1>;  /* SPI 34, IRQ_TYPE_EDGE_RISING */
+```
+
+Values:
+- 1 = Edge rising
+- 2 = Edge falling
+- 4 = Level high
+- 8 = Level low
+
+## x86 Interrupt Controllers
+
+### 8259 PIC (Programmable Interrupt Controller)
+
+The legacy 8259 PIC is used on older x86 systems and for basic interrupt handling.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBUKINTCTLR_XPIC=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_ARCH_X86_64=y
+```
+
+**Features:**
+- Two cascaded 8259 chips (master + slave)
+- 15 IRQ lines (IRQ0-IRQ15)
+- IRQ2 used for cascading
+- Port-mapped I/O
+
+**I/O Ports:**
+- Master PIC: 0x20 (command), 0x21 (data)
+- Slave PIC: 0xA0 (command), 0xA1 (data)
+
+**IRQ Mapping:**
+```
+IRQ 0  - System timer
+IRQ 1  - Keyboard
+IRQ 2  - Cascade from slave PIC
+IRQ 3  - Serial port 2
+IRQ 4  - Serial port 1
+IRQ 5  - Parallel port 2
+IRQ 6  - Floppy disk
+IRQ 7  - Parallel port 1
+IRQ 8  - Real-time clock
+IRQ 9  - Available
+IRQ 10 - Available
+IRQ 11 - Available
+IRQ 12 - PS/2 mouse
+IRQ 13 - Math coprocessor
+IRQ 14 - Primary ATA
+IRQ 15 - Secondary ATA
+```
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -machine pc \      # Uses 8259 PIC
+    unikernel.elf
+```
+
+**Source:** `drivers/ukintctlr/xpic/pic.c`
+
+### APIC (Advanced Programmable Interrupt Controller)
+
+Modern x86 systems use APIC for better multi-core support.
+
+**Configuration:**
+```kconfig
+CONFIG_LIBUKINTCTLR_APIC=y
+CONFIG_LIBUKINTCTLR_PIC=y    # APIC depends on PIC
+CONFIG_LIBUKINTCTLR=y
+CONFIG_HAVE_APIC=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_ARCH_X86_64=y
+```
+
+**Components:**
+- **Local APIC** - One per CPU core
+- **I/O APIC** - Routes device interrupts to Local APICs
+
+**Features:**
+- Support for many more IRQs (typically 24+)
+- Per-CPU interrupt delivery
+- Inter-processor interrupts (IPI)
+- Better priority handling
+- MSI (Message Signaled Interrupts) support
+
+**MMIO Registers:**
+- Local APIC base: 0xFEE00000 (default)
+- I/O APIC base: Varies (from ACPI/MP tables)
+
+**QEMU Example:**
+```bash
+qemu-system-x86_64 \
+    -machine q35 \     # Modern machine with APIC
+    -smp 4 \           # Multiple CPUs
+    unikernel.elf
+```
+
+**Note:** APIC support in Unikraft is platform-dependent and may require additional configuration.
+
+**Source:** `drivers/ukintctlr/xpic/apic.c`
+
+## Interrupt API
+
+### Registration and Deregistration
+
+```c
+#include <uk/intctlr.h>
+
+// Register handler
+typedef int (*uk_intctlr_irq_handler_t)(void *arg);
+
+int uk_intctlr_irq_register(unsigned int irq,
+                             uk_intctlr_irq_handler_t handler,
+                             void *arg);
+
+// Deregister handler
+int uk_intctlr_irq_unregister(unsigned int irq);
+```
+
+### Interrupt Control
+
+```c
+// Enable/disable
+int uk_intctlr_irq_enable(unsigned int irq);
+int uk_intctlr_irq_disable(unsigned int irq);
+
+// Priority (platform-specific)
+int uk_intctlr_irq_set_priority(unsigned int irq, unsigned int priority);
+
+// Affinity (multi-core systems)
+int uk_intctlr_irq_set_affinity(unsigned int irq, unsigned int cpu_mask);
+
+// Trigger type (GIC only)
+int uk_intctlr_irq_set_trigger(unsigned int irq, unsigned int trigger);
+```
+
+### Interrupt Status
+
+```c
+// Check if IRQ is pending
+int uk_intctlr_irq_is_pending(unsigned int irq);
+
+// Acknowledge IRQ
+void uk_intctlr_irq_ack(unsigned int irq);
+
+// Get active IRQ
+int uk_intctlr_irq_get_active(void);
+```
+
+## Platform Bus Integration
+
+On platforms with CONFIG_PAGING, GIC driver integrates with platform bus:
+
+```kconfig
+CONFIG_LIBUKINTCTLR_GIC=y
+CONFIG_LIBUKBUS_PLATFORM=y
+CONFIG_CONFIG_PAGING=y
+```
+
+This allows memory mapping of interrupt controller registers.
+
+## Interrupt Handler Best Practices
+
+### Handler Implementation
+
+```c
+static int device_irq_handler(void *arg)
+{
+    struct my_device *dev = arg;
+    
+    // Read interrupt status
+    uint32_t status = read_device_register(dev, STATUS_REG);
+    
+    // Clear interrupt at device
+    write_device_register(dev, STATUS_REG, status);
+    
+    // Process interrupt
+    if (status & TX_COMPLETE) {
+        handle_tx_complete(dev);
+    }
+    if (status & RX_READY) {
+        handle_rx_ready(dev);
+    }
+    
+    // Return handled/not handled
+    return UK_EVENT_HANDLED;
+}
+```
+
+### Handler Return Values
+
+```c
+UK_EVENT_HANDLED      // Interrupt was handled
+UK_EVENT_NOT_HANDLED  // Interrupt not for this device
+UK_EVENT_HANDLED_CONT // Handled, continue to next handler
+```
+
+### Shared Interrupts
+
+Multiple devices may share an IRQ line:
+
+```c
+// Handler must check if interrupt is from this device
+static int shared_irq_handler(void *arg)
+{
+    struct my_device *dev = arg;
+    
+    // Check if interrupt is from our device
+    if (!is_my_interrupt(dev)) {
+        return UK_EVENT_NOT_HANDLED;
+    }
+    
+    // Handle interrupt
+    handle_device_interrupt(dev);
+    
+    return UK_EVENT_HANDLED;
+}
+```
+
+## Debugging Interrupts
+
+### Enable Debug Output
+
+```kconfig
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTK_INFO=y
+CONFIG_LIBUKDEBUG_PRINTK_DEBUG=y
+```
+
+### Debug Prints
+
+```c
+uk_pr_info("IRQ %d registered\n", irq);
+uk_pr_debug("IRQ %d triggered, status=0x%x\n", irq, status);
+uk_pr_err("Failed to register IRQ %d: %d\n", irq, rc);
+```
+
+### Common Issues
+
+**No Interrupts Firing:**
+1. Check interrupt is enabled: `uk_intctlr_irq_enable(irq)`
+2. Verify IRQ number matches device tree
+3. Check device interrupt enable register
+4. Verify interrupt controller is initialized
+
+**Spurious Interrupts:**
+1. Ensure interrupt is acknowledged properly
+2. Check for shared IRQ conflicts
+3. Verify device interrupt clear sequence
+
+**Performance Issues:**
+1. Check interrupt priority settings
+2. Reduce interrupt rate if possible
+3. Use interrupt coalescing
+
+## Configuration Summary
+
+### ARM with GICv2
+
+```kconfig
+CONFIG_ARCH_ARM_64=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_LIBUKINTCTLR_GIC=y
+CONFIG_LIBUKINTCTLR_GICV2=y
+CONFIG_LIBUKBITOPS=y
+CONFIG_LIBUKOFW=y              # For FDT parsing
+CONFIG_LIBFDT=y
+```
+
+### ARM with GICv3
+
+```kconfig
+CONFIG_ARCH_ARM_64=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_LIBUKINTCTLR_GIC=y
+CONFIG_LIBUKINTCTLR_GICV3=y
+CONFIG_LIBUKBITOPS=y
+CONFIG_LIBUKOFW=y
+CONFIG_LIBFDT=y
+```
+
+### x86 with PIC
+
+```kconfig
+CONFIG_ARCH_X86_64=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_LIBUKINTCTLR_XPIC=y
+```
+
+### x86 with APIC
+
+```kconfig
+CONFIG_ARCH_X86_64=y
+CONFIG_HAVE_INTCTLR=y
+CONFIG_HAVE_APIC=y
+CONFIG_LIBUKINTCTLR=y
+CONFIG_LIBUKINTCTLR_XPIC=y     # PIC support required
+CONFIG_LIBUKINTCTLR_APIC=y
+```
+
+## Source Code Reference
+
+Interrupt controller driver locations:
+
+```
+drivers/ukintctlr/
+├── gic/
+│   ├── Config.uk              # GIC configuration
+│   ├── Makefile.uk            # Build rules
+│   ├── gic.c                  # Common GIC code
+│   ├── gic-v2.c               # GICv2 implementation
+│   ├── gic-v3.c               # GICv3 implementation
+│   └── include/uk/intctlr/
+│       ├── gic.h              # GIC common header
+│       ├── gic-v2.h           # GICv2 definitions
+│       ├── gic-v3.h           # GICv3 definitions
+│       └── limits.h           # IRQ limits
+└── xpic/
+    ├── Config.uk              # xPIC configuration
+    ├── Makefile.uk            # Build rules
+    ├── pic.c                  # 8259 PIC implementation
+    ├── apic.c                 # APIC implementation
+    └── include/uk/intctlr/
+        ├── apic.h             # APIC definitions
+        └── limits.h           # IRQ limits
+```
+
+## References
+
+- ARM GIC Architecture Specification: https://developer.arm.com/documentation/ihi0069/
+- Intel 8259A Datasheet: https://pdos.csail.mit.edu/6.828/2014/readings/hardware/8259A.pdf
+- Intel APIC Specification: Intel® 64 and IA-32 Architectures Software Developer's Manual, Volume 3
+- Source: `drivers/ukintctlr/` in Unikraft repository

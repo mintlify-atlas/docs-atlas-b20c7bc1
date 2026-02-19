@@ -1,0 +1,501 @@
+---
+title: ukvmem - Virtual Memory Management
+description: Virtual address space (VAS) management and virtual memory areas (VMAs) in Unikraft
+---
+
+# Virtual Memory Management (ukvmem)
+
+The `ukvmem` library provides comprehensive support for virtual address space (VAS) management in Unikraft. It allows creating, modifying, and removing virtual memory areas (VMAs) with support for demand paging, memory protection, and various memory types.
+
+## Overview
+
+Virtual memory management in Unikraft is built around two core concepts:
+
+- **Virtual Address Space (VAS)**: A collection of VMAs describing mappings and address reservations
+- **Virtual Memory Areas (VMAs)**: Regions in the address space with specific properties (protections, handlers, types)
+
+The library supports:
+- Demand paging and pre-allocation strategies
+- Custom page fault handlers for different memory types
+- VMA merging and splitting for efficient memory management
+- Multiple memory types (anonymous, DMA, stacks, reserved areas)
+
+```
+┌───────────────────────┐ 0x000000...0
+├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┤
+│/  /  /  /  /  /  /  / │
+│  /  / UNIKRAFT  /  /  │
+│ /  /  /  /  /  /  /  /│
+├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┤
+│                       │
+├───────────────────────┤◄─── VMA Base
+│/  /  /  VMA 1 /  /  / │
+├───────────────────────┤
+│/  /  /  /  /  /  /  / │
+│  /  /   VMA 2   /  /  │
+│ /  /  /  /  /  /  /  /│
+├───────────────────────┤
+│                       │
+├───────────────────────┤
+│/  /  /  VMA 3 /  /  / │
+├───────────────────────┤
+│                       │
+└───────────────────────┘ 0xffffff...f
+```
+
+## Core Data Structures
+
+### Virtual Address Space
+
+```c
+struct uk_vas {
+    struct uk_alloc *a;              /* Allocator for VMAs */
+    struct uk_pagetable *pt;         /* Page table */
+    __vaddr_t vma_base;              /* Base for new VMAs */
+    struct uk_list_head vma_list;    /* List of VMAs */
+    unsigned long flags;             /* VAS flags */
+};
+```
+
+**Flags:**
+- `UK_VAS_FLAG_NO_PAGING` - Disable on-demand paging
+
+### Virtual Memory Area
+
+```c
+struct uk_vma {
+    __vaddr_t start;                 /* Start address */
+    __vaddr_t end;                   /* End address */
+    struct uk_vas *vas;              /* Parent VAS */
+    const struct uk_vma_ops *ops;    /* Operations */
+    struct uk_list_head vma_list;    /* List entry */
+    unsigned long attr;              /* Page attributes */
+    unsigned long flags;             /* VMA flags */
+    int page_lvl;                    /* Desired page level */
+    const char *name;                /* Optional name */
+};
+```
+
+**Flags:**
+- `UK_VMA_FLAG_UNINITIALIZED` - Don't initialize memory
+
+## VAS Management API
+
+### Initialization and Control
+
+#### uk_vas_init
+```c
+int uk_vas_init(struct uk_vas *vas, struct uk_pagetable *pt,
+                struct uk_alloc *a);
+```
+Initializes a new virtual address space.
+
+**Parameters:**
+- `vas` - Pointer to uninitialized VAS object
+- `pt` - Page table for the address space
+- `a` - Allocator for VMA metadata
+
+**Returns:** 0 on success, negative errno on error
+
+**Location:** `lib/ukvmem/vmem.c:52`
+
+#### uk_vas_destroy
+```c
+void uk_vas_destroy(struct uk_vas *vas);
+```
+Unmaps and frees all VMAs in the virtual address space.
+
+**Parameters:**
+- `vas` - Virtual address space to destroy
+
+**Location:** `lib/ukvmem/vmem.c:75`
+
+#### uk_vas_get_active
+```c
+struct uk_vas *uk_vas_get_active(void);
+```
+Returns the currently active virtual address space.
+
+**Location:** `lib/ukvmem/vmem.c:33`
+
+#### uk_vas_set_active
+```c
+int uk_vas_set_active(struct uk_vas *vas);
+```
+Switches the currently active virtual address space.
+
+**Parameters:**
+- `vas` - Fully-initialized address space to switch to
+
+**Returns:** 0 on success, negative errno on error
+
+**Location:** `lib/ukvmem/vmem.c:38`
+
+## VMA Operations
+
+### Mapping Memory
+
+#### uk_vma_map
+```c
+int uk_vma_map(struct uk_vas *vas, __vaddr_t *vaddr, __sz len,
+               unsigned long attr, unsigned long flags, const char *name,
+               const struct uk_vma_ops *ops, void *args);
+```
+Creates a new virtual memory area in the virtual address space.
+
+**Parameters:**
+- `vas` - Virtual address space
+- `vaddr` - Virtual address (or `__VADDR_ANY` for automatic selection)
+- `len` - Length in bytes (must be page-aligned)
+- `attr` - Page attributes (`PAGE_ATTR_*`)
+- `flags` - Mapping flags (see below)
+- `name` - Optional name for the VMA
+- `ops` - VMA operations defining behavior
+- `args` - VMA-type specific arguments
+
+**Flags:**
+- `UK_VMA_MAP_POPULATE` - Prefault memory
+- `UK_VMA_MAP_UNINITIALIZED` - Don't zero anonymous memory
+- `UK_VMA_MAP_REPLACE` - Replace existing VMAs
+- `UK_VMA_MAP_SIZE(order)` - Enforce specific page size
+- `UK_VMA_MAP_SIZE_4KB`, `UK_VMA_MAP_SIZE_2MB`, `UK_VMA_MAP_SIZE_1GB` - Predefined page sizes
+
+**Returns:** 0 on success, negative errno on error
+- `-EINVAL` - Invalid alignment
+- `-EEXIST` - Collision without `UK_VMA_MAP_REPLACE`
+- `-ENOMEM` - No suitable address range or insufficient memory
+
+**Location:** `lib/ukvmem/vmem.c:599`
+
+### Unmapping Memory
+
+#### uk_vma_unmap
+```c
+int uk_vma_unmap(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+                 unsigned long flags);
+```
+Removes any mapping in the specified virtual address range.
+
+**Parameters:**
+- `vas` - Virtual address space
+- `vaddr` - Base address (must be page-aligned)
+- `len` - Number of bytes (must be page-aligned)
+- `flags` - Operation flags
+
+**Flags:**
+- `UK_VMA_FLAG_STRICT_VMA_CHECK` - Error if range has no mappings or holes
+
+**Returns:** 0 on success, negative errno on error
+
+**Location:** `lib/ukvmem/vmem.c:503`
+
+### Changing Attributes
+
+#### uk_vma_set_attr
+```c
+int uk_vma_set_attr(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+                    unsigned long attr, unsigned long flags);
+```
+Changes paging attributes in the specified address range.
+
+**Parameters:**
+- `vas` - Virtual address space
+- `vaddr` - Base address (must be page-aligned)
+- `len` - Length in bytes (must be page-aligned)
+- `attr` - New page attributes (`PAGE_ATTR_*`)
+- `flags` - Operation flags
+
+**Returns:** 0 on success, negative errno on error
+
+**Location:** `lib/ukvmem/vmem.c:832`
+
+### Memory Advising
+
+#### uk_vma_advise
+```c
+int uk_vma_advise(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+                  unsigned long advice, unsigned long flags);
+```
+Gives the virtual memory system advice about the specified address range.
+
+**Parameters:**
+- `vas` - Virtual address space
+- `vaddr` - Base address (must be page-aligned)
+- `len` - Length in bytes (must be page-aligned)
+- `advice` - Advisory flags (see below)
+- `flags` - Operation flags
+
+**Advice:**
+- `UK_VMA_ADV_DONTNEED` - Physical memory can be freed
+- `UK_VMA_ADV_WILLNEED` - Area should be prefaulted
+
+**Returns:** 0 on success, negative errno on error
+
+**Location:** `lib/ukvmem/vmem.c:930`
+
+## VMA Types
+
+### Reserved Memory
+
+Address reservations prevent allocation of the address range without consuming physical memory.
+
+```c
+extern const struct uk_vma_ops uk_vma_rsvd_ops;
+
+int uk_vma_reserve(struct uk_vas *vas, __vaddr_t *vaddr, __sz len);
+```
+
+Use cases:
+- Reserve address space for future use
+- Represent existing page table mappings (e.g., kernel code/data)
+
+### Anonymous Memory
+
+RAM-backed memory with no specific semantic. Zero-initialized by default.
+
+```c
+extern const struct uk_vma_ops uk_vma_anon_ops;
+
+int uk_vma_map_anon(struct uk_vas *vas, __vaddr_t *vaddr,
+                    __sz len, unsigned long attr,
+                    unsigned long flags, const char *name);
+```
+
+**Features:**
+- Demand paging supported
+- Can skip initialization with `UK_VMA_MAP_UNINITIALIZED`
+- Contents lost when unmapped
+
+**Example:**
+```c
+struct uk_vas *vas = uk_vas_get_active();
+__vaddr_t addr = __VADDR_ANY;
+__sz size = 4096 * 16; // 64KB
+
+// Map anonymous memory with demand paging
+int rc = uk_vma_map_anon(vas, &addr, size,
+                         PAGE_ATTR_PROT_RW,
+                         0, "my-anon-mem");
+```
+
+### Stack Memory
+
+Thread stacks with automatic growth and guard pages.
+
+```c
+extern const struct uk_vma_ops uk_vma_stack_ops;
+
+int uk_vma_map_stack(struct uk_vas *vas, __vaddr_t *vaddr,
+                     __sz len, unsigned long flags,
+                     const char *name, __sz premapped_len);
+```
+
+**Features:**
+- Guard pages at both ends (configurable)
+- Automatic growth up to maximum size
+- Cannot be split or merged
+- Memory allocated on first touch
+
+**Stack Flags:**
+- `UK_VMA_STACK_GROWS_UP` - Stack grows upward
+
+**Constants:**
+- `UK_VMA_STACK_TOP_GUARD_SIZE`
+- `UK_VMA_STACK_BOTTOM_GUARD_SIZE`
+- `UK_VMA_STACK_GUARDS_SIZE`
+
+**Example:**
+```c
+struct uk_vas *vas = uk_vas_get_active();
+__vaddr_t stack_addr = __VADDR_ANY;
+__sz stack_size = 1024 * 1024; // 1MB
+__sz premap_size = 4096 * 4;   // 16KB pre-allocated
+
+int rc = uk_vma_map_stack(vas, &stack_addr, stack_size,
+                          0, "thread-stack", premap_size);
+```
+
+### Direct-Mapped Physical Memory (DMA)
+
+Maps specific physical addresses to virtual memory.
+
+```c
+extern const struct uk_vma_ops uk_vma_dma_ops;
+
+int uk_vma_map_dma(struct uk_vas *vas, __vaddr_t *vaddr,
+                   __sz len, unsigned long attr,
+                   unsigned long flags, const char *name,
+                   __paddr_t paddr);
+```
+
+**Features:**
+- Map device memory or manually allocated physical memory
+- Multiple mappings of same physical range allowed
+- Unmapping doesn't release physical memory
+- Demand paging supported
+
+**Example:**
+```c
+struct uk_vas *vas = uk_vas_get_active();
+__vaddr_t virt_addr = __VADDR_ANY;
+__paddr_t phys_addr = 0x80000000; // Device memory
+__sz size = 4096;
+
+int rc = uk_vma_map_dma(vas, &virt_addr, size,
+                        PAGE_ATTR_PROT_RW,
+                        UK_VMA_MAP_POPULATE,
+                        "device-mem", phys_addr);
+```
+
+## Page Fault Handling
+
+### Fault Context
+
+```c
+struct uk_vm_fault {
+    const __vaddr_t vaddr;      /* Faulting address */
+    const __sz len;             /* Bytes to supply */
+    const __vaddr_t vbase;      /* Base address for resolution */
+    __paddr_t paddr;            /* Physical address to map */
+    const unsigned int type;    /* Fault type */
+    __pte_t pte;                /* PTE to use */
+    const unsigned int level;   /* PTE level */
+    struct __regs *regs;        /* Trap frame */
+};
+```
+
+**Fault Types:**
+- `UK_VMA_FAULT_READ` - Attempted read access
+- `UK_VMA_FAULT_WRITE` - Attempted write access
+- `UK_VMA_FAULT_EXEC` - Attempted instruction fetch
+- `UK_VMA_FAULT_NONPRESENT` - Page not present
+- `UK_VMA_FAULT_MISCONFIG` - Misconfiguration in page table
+- `UK_VMA_FAULT_SOFT` - Software-generated fault
+
+### VMA Operations Structure
+
+```c
+struct uk_vma_ops {
+    __vaddr_t (*get_base)(struct uk_vas *vas, void *data,
+                         unsigned long flags);
+    int (*new)(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+              void *data, unsigned long attr, unsigned long *flags,
+              struct uk_vma **vma);
+    void (*destroy)(struct uk_vma *vma);
+    int (*fault)(struct uk_vma *vma, struct uk_vm_fault *fault);
+    int (*unmap)(struct uk_vma *vma, __vaddr_t vaddr, __sz len);
+    int (*split)(struct uk_vma *vma, __vaddr_t vaddr,
+                struct uk_vma **new_vma);
+    int (*merge)(struct uk_vma *vma, struct uk_vma *next);
+    int (*set_attr)(struct uk_vma *vma, unsigned long attr);
+    int (*advise)(struct uk_vma *vma, __vaddr_t vaddr, __sz len,
+                 unsigned long advice);
+};
+```
+
+## Helper Functions
+
+### VMA Query Functions
+
+```c
+/* Get VMA length in bytes */
+static inline __sz uk_vma_len(struct uk_vma *vma);
+
+/* Find VMA at address */
+const struct uk_vma *uk_vma_find(struct uk_vas *vas, __vaddr_t vaddr);
+
+/* Iterate VMAs */
+const struct uk_vma *uk_vma_first(struct uk_vas *vas);
+const struct uk_vma *uk_vma_last(struct uk_vas *vas);
+const struct uk_vma *uk_vma_next(const struct uk_vma *vma);
+const struct uk_vma *uk_vma_prev(const struct uk_vma *vma);
+```
+
+### Paging Control
+
+```c
+/* Temporarily disable demand paging */
+static inline unsigned long uk_vas_paging_savef(struct uk_vas *vas);
+
+/* Restore paging flag */
+static inline void uk_vas_paging_restoref(struct uk_vas *vas,
+                                          unsigned long flag);
+```
+
+## Common Usage Patterns
+
+### Creating a Virtual Address Space
+
+```c
+#include <uk/vmem.h>
+#include <uk/plat/paging.h>
+
+struct uk_vas vas;
+struct uk_pagetable *pt;
+struct uk_alloc *a = uk_alloc_get_default();
+
+// Create page table
+pt = ukplat_pt_init(a, 0);
+
+// Initialize VAS
+int rc = uk_vas_init(&vas, pt, a);
+if (rc < 0)
+    return rc;
+
+// Activate VAS
+uk_vas_set_active(&vas);
+```
+
+### Allocating Memory with Demand Paging
+
+```c
+struct uk_vas *vas = uk_vas_get_active();
+__vaddr_t addr = __VADDR_ANY;
+__sz size = 1024 * 1024; // 1MB
+
+// Map with demand paging (pages allocated on access)
+int rc = uk_vma_map_anon(vas, &addr, size,
+                         PAGE_ATTR_PROT_RW,
+                         0, "lazy-mem");
+```
+
+### Pre-faulting Memory
+
+```c
+__vaddr_t addr = __VADDR_ANY;
+__sz size = 64 * 1024; // 64KB
+
+// Map and immediately allocate all pages
+int rc = uk_vma_map_anon(vas, &addr, size,
+                         PAGE_ATTR_PROT_RW,
+                         UK_VMA_MAP_POPULATE,
+                         "eager-mem");
+```
+
+### Replacing Existing Mappings
+
+```c
+__vaddr_t specific_addr = 0x100000;
+__sz size = 4096;
+
+// Replace any existing mapping at this address
+int rc = uk_vma_map_anon(vas, &specific_addr, size,
+                         PAGE_ATTR_PROT_RW,
+                         UK_VMA_MAP_REPLACE,
+                         "replacement");
+```
+
+## Configuration Options
+
+The following configuration options are available in `Config.uk`:
+
+- `CONFIG_LIBUKVMEM_DEFAULT_BASE` - Default base address for VMAs
+- `CONFIG_LIBUKVMEM_DEMAND_PAGE_IN_SIZE` - Size for demand paging
+- `CONFIG_LIBUKVMEM_STACK_GUARD_PAGES_TOP` - Top guard pages for stacks
+- `CONFIG_LIBUKVMEM_STACK_GUARD_PAGES_BOTTOM` - Bottom guard pages for stacks
+
+## See Also
+
+- [ukmmap - Memory Mapping](/libraries/ukmmap)
+- [allocators - Memory Allocator Implementations](/libraries/allocators)
+- Architecture-specific paging documentation

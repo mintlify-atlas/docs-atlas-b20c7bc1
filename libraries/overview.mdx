@@ -1,0 +1,161 @@
+---
+title: Core Libraries Overview
+description: Overview of Unikraft's internal core libraries that provide essential system functionality
+---
+
+Unikraft's core libraries provide the fundamental building blocks for unikernel construction. These internal libraries implement essential system services, abstractions, and utilities that higher-level applications and external libraries depend on.
+
+## Library Categories
+
+### Boot and Initialization
+- **ukboot** - Boot and initialization library
+- **ukargparse** - Command-line argument parsing
+- **uklibid** - Library identification
+- **uklibparam** - Library parameter management
+- **ukreloc** - Binary relocation support
+
+### Memory Management
+- **ukalloc** - Memory allocator abstraction layer
+- **ukallocbbuddy** - Binary buddy allocator implementation
+- **ukallocpool** - Pool allocator
+- **ukallocregion** - Region-based allocator
+- **ukallocstack** - Stack allocator
+- **ukfalloc** - Frame allocator abstraction
+- **ukfallocbuddy** - Binary buddy frame allocator
+- **ukmmap** - Memory mapping interface
+- **ukvmem** - Virtual memory management
+
+### Scheduling and Threading
+- **uksched** - Scheduler abstraction layer
+- **ukschedcoop** - Cooperative scheduler implementation
+- **uklock** - Locking primitives
+
+### Debugging and Tracing
+- **ukdebug** - Debugging utilities and assertions
+- **uktest** - Unit testing framework
+- **ukgcov** - Code coverage support
+- **ubsan** - Undefined Behavior Sanitizer
+
+### I/O and Devices
+- **ukbus** - Bus abstraction layer
+- **ukblkdev** - Block device interface
+- **uknetdev** - Network device interface
+- **ukintctlr** - Interrupt controller abstraction
+- **ukconsole** - Console output management
+- **ukprint** - Print utilities
+
+### File Systems and Storage
+- **vfscore** - Virtual File System core
+- **ukfs** - File system abstraction
+- **ukfs-devfs** - Device file system
+- **ukfs-ramfs** - RAM-based file system
+- **ukfs-virtiofs** - VirtIO file system
+- **devfs** - Device file system implementation
+- **ramfs** - RAM file system implementation
+- **ukfile** - File abstraction layer
+- **ukfile-pseudo** - Pseudo file support
+- **ukcpio** - CPIO archive support
+- **ukstore** - Key-value storage interface
+
+### POSIX Compatibility
+- **posix-environ** - Environment variables
+- **posix-eventfd** - Event file descriptors
+- **posix-fd** - File descriptor abstraction
+- **posix-fdio** - File descriptor I/O operations
+- **posix-fdtab** - File descriptor table
+- **posix-futex** - Fast userspace mutexes
+- **posix-libdl** - Dynamic linking support
+- **posix-mmap** - Memory mapping
+- **posix-netlink** - Netlink sockets
+- **posix-pipe** - Pipe implementation
+- **posix-poll** - Poll/select interface
+- **posix-process** - Process management
+- **posix-socket** - Socket interface
+- **posix-sysinfo** - System information
+- **posix-time** - Time functions
+- **posix-timerfd** - Timer file descriptors
+- **posix-tty** - Terminal support
+- **posix-unixsocket** - Unix domain sockets
+- **posix-user** - User and group management
+- **posix-vfs** - POSIX VFS interface
+- **posix-vfs-fstab** - File system table
+
+### Networking and Communication
+- **uk9p** - 9P protocol implementation
+- **9pfs** - 9P file system
+- **ukmpi** - Message Passing Interface
+
+### Utilities and Support
+- **nolibc** - Minimal C library subset
+- **syscall_shim** - System call shim layer
+- **isrlib** - Interrupt Service Routine library
+- **ukatomic** - Atomic operations
+- **ukbitops** - Bit manipulation operations
+- **ukring** - Ring buffer implementation
+- **uksglist** - Scatter-gather list
+- **uksparsebuf** - Sparse buffer management
+- **ukstreambuf** - Stream buffer
+- **uktimeconv** - Time conversion utilities
+- **ukrandom** - Random number generation
+- **uknofault** - No-fault memory access
+- **uksp** - Stack pointer utilities
+- **ukbinfmt** - Binary format support
+- **ukpod** - POD (Plain Old Data) utilities
+
+### Hardware and Platform Support
+- **fdt** - Flattened Device Tree support
+- **ukofw** - Open Firmware interface
+
+### Advanced Features
+- **ukrust** - Rust language support
+- **ukwait** - Wait queue implementation
+
+## Common Patterns
+
+### Registration and Initialization
+
+Most Unikraft libraries follow a consistent initialization pattern:
+
+1. **Early initialization** - Platform-specific setup via `earlytab`
+2. **Library constructors** - C++ style constructors for library init
+3. **Boot sequence** - Coordinated initialization through `ukboot`
+
+### Abstraction Layers
+
+Unikraft uses abstraction layers to separate interface from implementation:
+
+- **Allocation**: `ukalloc` provides the interface, `ukallocbbuddy` implements it
+- **Scheduling**: `uksched` defines the API, `ukschedcoop` provides an implementation
+- **File Systems**: `vfscore` and `ukfs` provide abstractions for multiple FS types
+
+### Configuration
+
+All libraries are configured through KConfig options in their respective `Config.uk` files. Configuration options typically include:
+
+- Feature enables/disables
+- Buffer sizes and limits
+- Debug and statistics options
+- Implementation choices
+
+## Using Core Libraries
+
+Core libraries are automatically included based on dependencies specified in your application's `Config.uk`. For example:
+
+```kconfig
+config MYAPP
+    bool "My Application"
+    select LIBUKBOOT
+    select LIBUKALLOC
+    select LIBUKSCHED
+```
+
+The build system resolves dependencies and ensures libraries are initialized in the correct order.
+
+## Next Steps
+
+Explore detailed documentation for specific core libraries:
+
+- [ukboot - Boot and Initialization](/libraries/ukboot)
+- [ukalloc - Memory Allocation](/libraries/ukalloc)
+- [uksched - Scheduling](/libraries/uksched)
+- [ukdebug - Debugging Utilities](/libraries/ukdebug)

@@ -1,0 +1,677 @@
+---
+title: "KVM Platform"
+description: "Complete guide to KVM platform support in Unikraft"
+---
+
+## Overview
+
+The KVM (Kernel-based Virtual Machine) platform enables Unikraft to run as a guest on KVM-based hypervisors. It's the most feature-rich and actively developed platform, supporting multiple boot protocols, virtual machine monitors, and advanced hardware features.
+
+<Info>
+**Platform location**: `plat/kvm/`
+
+**Supported architectures**: x86_64, ARM64
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Boot Protocols" icon="boot">
+    - Multiboot (x86_64)
+    - Lxboot (Linux boot protocol)
+    - QEMU virt (ARM64)
+    - EFI stub (UEFI)
+  </Card>
+  
+  <Card title="VMM Support" icon="server">
+    - QEMU (full featured)
+    - Firecracker (lightweight)
+    - Cloud Hypervisor (coming soon)
+  </Card>
+  
+  <Card title="Hardware Support" icon="microchip">
+    - SMP (multiprocessor)
+    - ACPI tables
+    - PCI devices
+    - MMIO devices
+  </Card>
+  
+  <Card title="Device Drivers" icon="plug">
+    - virtio-net (networking)
+    - virtio-blk (block storage)
+    - virtio-9p (filesystem)
+    - Serial console (NS16550/PL011)
+  </Card>
+</CardGroup>
+
+## Configuration
+
+### Enabling KVM Platform
+
+<Tabs>
+  <Tab title="Using kraft">
+    ```bash
+    # Create or configure your project
+    kraft menu config
+    
+    # Navigate to: Platform Configuration
+    # Select: [*] KVM guest
+    ```
+  </Tab>
+  
+  <Tab title="Config.uk">
+    ```makefile
+    CONFIG_PLAT_KVM=y
+    CONFIG_KVM_VMM_QEMU=y          # or CONFIG_KVM_VMM_FIRECRACKER=y
+    CONFIG_KVM_BOOT_PROTO_LXBOOT=y # Boot protocol
+    ```
+  </Tab>
+  
+  <Tab title="Kraftfile">
+    ```yaml
+    spec: v0.6
+    
+    runtime: base:latest
+    
+    targets:
+      - platform: qemu
+        architecture: x86_64
+    
+    cmd: ["/my-app"]
+    ```
+  </Tab>
+</Tabs>
+
+### Boot Protocol Selection
+
+The KVM platform supports multiple boot protocols. Choose based on your VMM and architecture:
+
+<AccordionGroup>
+  <Accordion title="Lxboot (Recommended)" icon="linux">
+    **Linux 64-bit Boot Protocol**
+    
+    - **Use for**: Firecracker, QEMU (x86_64 and ARM64)
+    - **Benefits**: Lightweight, fast boot, no dependencies
+    - **Configuration**: `CONFIG_KVM_BOOT_PROTO_LXBOOT=y`
+    
+    ```bash
+    # Build with Lxboot
+    kraft build --plat qemu --arch x86_64
+    
+    # Run with QEMU
+    qemu-system-x86_64 -kernel build/app_qemu-x86_64 \
+        -nographic -m 128M
+    ```
+  </Accordion>
+  
+  <Accordion title="Multiboot" icon="box">
+    **Multiboot Boot Protocol Version 1**
+    
+    - **Use for**: QEMU (x86_64 only), GRUB bootloader
+    - **Benefits**: Standard boot protocol, bootloader support
+    - **Configuration**: `CONFIG_KVM_BOOT_PROTO_MULTIBOOT=y`
+    - **Requires**: Not available with Firecracker
+    
+    ```bash
+    # Run with multiboot
+    qemu-system-x86_64 -kernel build/app_qemu-x86_64 \
+        -append "console=ttyS0" -nographic
+    ```
+  </Accordion>
+  
+  <Accordion title="QEMU virt" icon="server">
+    **QEMU virt Environment (ARM64)**
+    
+    - **Use for**: QEMU ARM64 virtual platform
+    - **Benefits**: Full device tree support, ARM-specific features
+    - **Configuration**: `CONFIG_KVM_BOOT_PROTO_QEMU_VIRT=y`
+    
+    ```bash
+    # Run on ARM64
+    qemu-system-aarch64 -machine virt -cpu cortex-a57 \
+        -kernel build/app_qemu-arm64 -nographic
+    ```
+  </Accordion>
+  
+  <Accordion title="EFI Stub" icon="circle-check">
+    **UEFI Firmware Boot**
+    
+    - **Use for**: UEFI-enabled systems, secure boot
+    - **Benefits**: ACPI support, TCG security features, modern boot
+    - **Configuration**: `CONFIG_KVM_BOOT_PROTO_EFI_STUB=y`
+    - **Requires**: `CONFIG_OPTIMIZE_PIE=y` (Position Independent Executable)
+    
+    ```bash
+    # Run with OVMF (UEFI firmware)
+    qemu-system-x86_64 -bios /usr/share/ovmf/OVMF.fd \
+        -kernel build/app_qemu-x86_64.efi \
+        -nographic
+    ```
+    
+    **EFI-specific options**:
+    ```makefile
+    # Command line file name
+    CONFIG_KVM_BOOT_PROTO_EFI_STUB_CMDLINE_FNAME="myapp.cmdl"
+    
+    # Initial RAM disk file name
+    CONFIG_KVM_BOOT_PROTO_EFI_STUB_INITRD_FNAME="myapp.initrd"
+    
+    # TCG Reset Attack Mitigation
+    CONFIG_KVM_BOOT_PROTO_EFI_STUB_RST_ATK_MITIGATION=y
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Virtual Machine Monitors
+
+### QEMU
+
+QEMU is the full-featured, default VMM for KVM:
+
+<Tabs>
+  <Tab title="x86_64">
+    ```bash
+    # Basic QEMU run
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -nographic \
+        -m 128M \
+        -cpu host \
+        -enable-kvm
+    
+    # With networking (virtio-net)
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -nographic \
+        -m 128M \
+        -netdev user,id=net0 \
+        -device virtio-net-pci,netdev=net0
+    
+    # With block device (virtio-blk)
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -nographic \
+        -m 128M \
+        -drive file=disk.img,if=virtio,format=raw
+    ```
+  </Tab>
+  
+  <Tab title="ARM64">
+    ```bash
+    # Basic QEMU ARM64 run
+    qemu-system-aarch64 \
+        -machine virt \
+        -cpu cortex-a57 \
+        -kernel build/app_qemu-arm64 \
+        -nographic \
+        -m 128M
+    
+    # With GICv3 interrupt controller
+    qemu-system-aarch64 \
+        -machine virt,gic-version=3 \
+        -cpu cortex-a57 \
+        -kernel build/app_qemu-arm64 \
+        -nographic
+    ```
+  </Tab>
+  
+  <Tab title="Advanced Options">
+    ```bash
+    # SMP (multiprocessor) support
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -smp 4 \
+        -m 512M \
+        -enable-kvm
+    
+    # With serial console redirection
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -serial stdio \
+        -display none
+    
+    # Monitor and debug
+    qemu-system-x86_64 \
+        -kernel build/app_qemu-x86_64 \
+        -nographic \
+        -monitor telnet:127.0.0.1:1234,server,nowait
+    ```
+  </Tab>
+</Tabs>
+
+**QEMU-specific configuration**:
+```makefile
+CONFIG_KVM_VMM_QEMU=y
+CONFIG_LIBNS16550=y              # Serial console (x86_64)
+CONFIG_LIBPL011=y                # Serial console (ARM64)
+CONFIG_LIBUKINTCTLR_GICV2=y      # GICv2 (ARM64)
+CONFIG_LIBVGACONS=y              # VGA console (x86_64)
+```
+
+### Firecracker
+
+Firecracker is a lightweight VMM optimized for serverless and container workloads:
+
+<Steps>
+  <Step title="Configure for Firecracker">
+    ```makefile
+    CONFIG_PLAT_KVM=y
+    CONFIG_KVM_VMM_FIRECRACKER=y
+    CONFIG_KVM_BOOT_PROTO_LXBOOT=y  # Required for Firecracker
+    ```
+  </Step>
+  
+  <Step title="Build the unikernel">
+    ```bash
+    kraft build --plat qemu --arch x86_64
+    ```
+  </Step>
+  
+  <Step title="Create Firecracker config">
+    Create `config.json`:
+    ```json
+    {
+      "boot-source": {
+        "kernel_image_path": "build/app_qemu-x86_64",
+        "boot_args": "console=ttyS0 reboot=k panic=1"
+      },
+      "drives": [],
+      "machine-config": {
+        "vcpu_count": 1,
+        "mem_size_mib": 128,
+        "ht_enabled": false
+      },
+      "network-interfaces": []
+    }
+    ```
+  </Step>
+  
+  <Step title="Run with Firecracker">
+    ```bash
+    # Start Firecracker
+    firecracker --api-sock /tmp/firecracker.sock --config-file config.json
+    ```
+  </Step>
+</Steps>
+
+**Firecracker features**:
+- **Ultra-fast boot**: Sub-millisecond boot times
+- **Minimal overhead**: Optimized for density
+- **Security**: Strong isolation with seccomp
+- **MMIO devices**: virtio-mmio (not PCI)
+
+```makefile
+# Firecracker-specific config
+CONFIG_VIRTIO_MMIO_LINUX_COMPAT_CMDLINE=y  # MMIO device cmdline compat
+CONFIG_LIBNS16550_COM1=y                   # Serial on COM1
+```
+
+## Platform Implementation
+
+### Source Code Structure
+
+```
+plat/kvm/
+├── Config.uk           # KVM configuration options
+├── Makefile.uk         # Build rules
+├── Linker.uk          # Linker script selection
+├── x86/               # x86-64 specific code
+│   ├── setup.c        # Platform initialization
+│   ├── lcpu.c         # CPU management
+│   ├── multiboot.c    # Multiboot support
+│   ├── lxboot.c       # Linux boot protocol
+│   ├── efi_entry64.S  # EFI entry point
+│   └── traps.c        # Exception handling
+├── arm/               # ARM64 specific code
+│   ├── setup.c        # Platform initialization
+│   ├── lcpu.c         # CPU management
+│   └── exceptions.S   # Exception vectors
+├── efi.c              # EFI runtime services
+├── io.c               # I/O operations
+├── memory.c           # Memory management
+└── shutdown.c         # Shutdown/reboot
+```
+
+### Initialization Flow
+
+The KVM platform follows this initialization sequence:
+
+<Steps>
+  <Step title="Boot Entry">
+    Platform-specific entry point based on boot protocol:
+    - **Multiboot**: `x86/multiboot.S:_multiboot_entry`
+    - **Lxboot**: `x86/lxboot.S:_lxboot_entry`
+    - **EFI**: `x86/efi_entry64.S:_start`
+  </Step>
+  
+  <Step title="Early Setup">
+    From `plat/kvm/x86/setup.c:_ukplat_entry()`:
+    ```c
+    void _ukplat_entry(struct lcpu *lcpu, struct ukplat_bootinfo *bi)
+    {
+        /* Initialize trap vector table */
+        traps_table_init();
+        
+        /* Execute early init */
+        uk_boot_early_init(bi);
+        
+        /* Initialize bootstrap CPU */
+        lcpu_init(lcpu);
+        
+        /* Initialize interrupt controller */
+        uk_intctlr_probe();
+        
+        /* Initialize memory subsystem */
+        ukplat_mem_init();
+        
+        /* Switch to boot stack and continue */
+        lcpu_arch_jump_to(bstack, ukplat_entry2);
+    }
+    ```
+  </Step>
+  
+  <Step title="Device Initialization">
+    - Probe interrupt controllers (APIC/GIC)
+    - Initialize platform devices
+    - Set up virtio transports (PCI/MMIO)
+  </Step>
+  
+  <Step title="Application Entry">
+    Transfer control to application main function via `uk_boot_entry()`
+  </Step>
+</Steps>
+
+### Shutdown and Reboot
+
+From `plat/kvm/shutdown.c`:
+
+```c
+void ukplat_terminate(enum ukplat_gstate request)
+{
+    uk_pr_info("Unikraft halted\n");
+    
+    switch (request) {
+    case UKPLAT_RESTART:
+        uk_efi_rs_reset_system(UK_EFI_RESET_COLD);
+        break;
+    default:
+        uk_efi_rs_reset_system(UK_EFI_RESET_SHUTDOWN);
+    }
+    
+    /* Try platform-specific shutdown */
+    system_off(request);
+    
+    /* If all else fails, halt CPU */
+    __CPU_HALT();
+}
+```
+
+**Shutdown methods by boot protocol**:
+- **EFI stub**: Uses EFI runtime services `reset_system()`
+- **ACPI**: Uses ACPI reset register or `\\_S5` sleep state
+- **Legacy**: Port I/O to ACPI PM or fallback to CPU halt
+
+## Advanced Features
+
+### SMP (Symmetric Multiprocessing)
+
+Enable multiprocessor support:
+
+```makefile
+CONFIG_UKPLAT_LCPU_MAXCOUNT=4    # Support up to 4 CPUs
+CONFIG_HAVE_SMP=y                 # Enable SMP support
+CONFIG_UKPLAT_ACPI=y             # Required for x86_64 SMP
+CONFIG_LIBUKINTCTLR_APIC=y       # APIC interrupt controller
+```
+
+Run with multiple CPUs:
+```bash
+qemu-system-x86_64 -kernel build/app_qemu-x86_64 \
+    -smp 4 -m 512M -enable-kvm
+```
+
+From `plat/kvm/x86/setup.c`:
+```c
+#if defined(CONFIG_HAVE_SMP) && defined(CONFIG_UKPLAT_ACPI)
+    rc = acpi_init();
+    if (likely(rc == 0)) {
+        rc = lcpu_mp_init(CONFIG_UKPLAT_LCPU_RUN_IRQ,
+                          CONFIG_UKPLAT_LCPU_WAKEUP_IRQ,
+                          NULL);
+        if (unlikely(rc))
+            uk_pr_err("SMP init failed: %d\n", rc);
+    }
+#endif
+```
+
+### ACPI Support
+
+ACPI provides hardware discovery and configuration:
+
+```makefile
+CONFIG_UKPLAT_ACPI=y              # Enable ACPI parsing
+CONFIG_UKPLAT_ACPI_CHECKSUM=y     # Verify checksums
+```
+
+**ACPI tables used**:
+- **MADT** (Multiple APIC Description Table): CPU and interrupt controller info
+- **FADT** (Fixed ACPI Description Table): System reset register
+- **MCFG** (Memory Mapped Configuration): PCI Express config space
+
+### Paging and Virtual Memory
+
+Enable advanced memory management:
+
+```makefile
+CONFIG_PAGING=y                   # Enable virtual memory API
+CONFIG_PAGING_STATS=y            # Collect paging statistics
+CONFIG_ENFORCE_W_XOR_X=y         # Enforce W^X (ARM64)
+```
+
+**Capabilities**:
+- **Page table management**: Create, modify, destroy page tables
+- **Memory protection**: Set read/write/execute permissions
+- **W^X enforcement**: Prevent code injection attacks (ARM64)
+- **Large pages**: Use 2MB/1GB pages for better TLB efficiency
+
+### Timer and Clocks
+
+KVM platform provides high-resolution timers:
+
+**x86_64**: TSC (Time Stamp Counter) with KVM paravirt clock
+```c
+// From plat/kvm/x86/tscclock.c
+static __u64 tsc_frequency;
+
+__nsec ukplat_monotonic_clock(void)
+{
+    return ukarch_rdtsc() * 1000000000ULL / tsc_frequency;
+}
+```
+
+**ARM64**: ARM Generic Timer
+```c
+// ARM generic timer with 1ns resolution
+CONFIG_LIBUKTIMER=y
+```
+
+Configure timer frequency:
+```makefile
+CONFIG_HZ=100    # Timer interrupt frequency (Hz)
+```
+
+## Debugging
+
+### Serial Console
+
+Enable early console output:
+
+<Tabs>
+  <Tab title="x86_64">
+    ```makefile
+    CONFIG_LIBNS16550=y
+    CONFIG_LIBNS16550_EARLY_CONSOLE=y
+    CONFIG_LIBNS16550_COM1=y
+    ```
+  </Tab>
+  
+  <Tab title="ARM64">
+    ```makefile
+    CONFIG_LIBPL011=y
+    CONFIG_LIBPL011_EARLY_CONSOLE=y
+    ```
+  </Tab>
+</Tabs>
+
+### GDB Debugging
+
+Debug with GDB over QEMU:
+
+```bash
+# Start QEMU with GDB server
+qemu-system-x86_64 -kernel build/app_qemu-x86_64 \
+    -nographic -s -S
+
+# In another terminal, connect with GDB
+gdb build/app_qemu-x86_64.dbg
+(gdb) target remote :1234
+(gdb) break main
+(gdb) continue
+```
+
+### Kernel Messages
+
+Configure debug output:
+```makefile
+CONFIG_LIBUKDEBUG=y
+CONFIG_LIBUKDEBUG_PRINTK=y
+CONFIG_LIBUKDEBUG_PRINTK_INFO=y
+CONFIG_LIBUKDEBUG_PRINTK_WARN=y
+CONFIG_LIBUKDEBUG_PRINTK_ERR=y
+```
+
+## Performance Optimization
+
+### KVM Acceleration
+
+Enable hardware virtualization:
+```bash
+# Ensure KVM module is loaded
+lsmod | grep kvm
+
+# Run with KVM acceleration
+qemu-system-x86_64 -kernel build/app_qemu-x86_64 \
+    -enable-kvm -cpu host
+```
+
+### virtio Optimization
+
+Use paravirtualized devices for better performance:
+
+```makefile
+CONFIG_LIBVIRTIO_NET=y    # Network
+CONFIG_LIBVIRTIO_BLK=y    # Block storage
+CONFIG_LIBVIRTIO_9P=y     # Filesystem
+```
+
+**virtio features**:
+- Direct guest-host communication
+- Reduced context switches
+- Better throughput and latency
+
+### Memory Optimization
+
+```makefile
+# Use huge pages (host side)
+# Add to QEMU: -mem-prealloc -mem-path /dev/hugepages
+
+# Optimize memory regions
+CONFIG_UKPLAT_MEMREGION_MAX_COUNT=64
+
+# Enable memory statistics
+CONFIG_UKALLOC_STATS=y
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Boot hangs or crashes" icon="triangle-exclamation">
+    **Symptoms**: Unikernel doesn't boot or crashes immediately
+    
+    **Solutions**:
+    - Check boot protocol matches VMM requirements
+    - Verify architecture is correct (x86_64 vs ARM64)
+    - Enable early console output for debug messages
+    - Try different boot protocol (e.g., Lxboot instead of Multiboot)
+    
+    ```bash
+    # Enable verbose boot
+    qemu-system-x86_64 -kernel build/app -nographic -d int,cpu_reset
+    ```
+  </Accordion>
+  
+  <Accordion title="No console output" icon="terminal">
+    **Symptoms**: Unikernel appears to run but no output
+    
+    **Solutions**:
+    - Enable serial console in config
+    - Check QEMU serial redirection: `-serial stdio` or `-nographic`
+    - Verify console device is initialized
+    
+    ```makefile
+    CONFIG_LIBNS16550=y
+    CONFIG_LIBNS16550_EARLY_CONSOLE=y
+    ```
+  </Accordion>
+  
+  <Accordion title="Networking doesn't work" icon="wifi">
+    **Symptoms**: Network traffic not reaching unikernel
+    
+    **Solutions**:
+    - Check virtio-net driver is enabled: `CONFIG_LIBVIRTIO_NET=y`
+    - Verify QEMU network configuration
+    - Check network device is attached
+    
+    ```bash
+    # User networking (simplest)
+    qemu-system-x86_64 -kernel build/app \
+        -netdev user,id=net0,hostfwd=tcp::8080-:80 \
+        -device virtio-net-pci,netdev=net0
+    ```
+  </Accordion>
+  
+  <Accordion title="EFI boot fails" icon="circle-xmark">
+    **Symptoms**: EFI stub doesn't boot or crashes
+    
+    **Solutions**:
+    - Ensure PIE is enabled: `CONFIG_OPTIMIZE_PIE=y`
+    - Verify OVMF firmware is installed
+    - Check EFI system table is accessible
+    
+    ```bash
+    # Install OVMF
+    sudo apt install ovmf  # Debian/Ubuntu
+    sudo dnf install edk2-ovmf  # Fedora
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Xen Platform" icon="server" href="/platforms/xen">
+    Learn about Xen paravirtualization support
+  </Card>
+  
+  <Card title="Cloud Deployment" icon="cloud" href="/platforms/cloud-deployment">
+    Deploy to KraftCloud production environment
+  </Card>
+  
+  <Card title="Networking Guide" icon="network-wired" href="/guides/networking">
+    Configure networking for your application
+  </Card>
+  
+  <Card title="Storage Guide" icon="database" href="/guides/storage">
+    Add block storage and filesystems
+  </Card>
+</CardGroup>

@@ -1,0 +1,188 @@
+---
+title: "Introduction to Unikraft"
+description: "The fast, secure and open-source unikernel development kit for building highly optimized, lightweight applications"
+---
+
+<div align="center">
+  <img src="/images/unikraft-hero.svg" alt="Unikraft - The fast, secure and open-source Unikernel Development Kit" />
+</div>
+
+## What is Unikraft?
+
+Unikraft is a radical, yet Linux-compatible technology for running applications as highly optimized, lightweight and single-purpose virtual machines (known as unikernels). With Unikraft, you can build custom operating systems tailored to your specific application requirements, achieving best-in-class performance, security, and efficiency.
+
+<CardGroup cols={2}>
+  <Card title="Instantaneous Cold-boots" icon="bolt">
+    Boot times in milliseconds instead of tens of seconds with Linux-based systems
+  </Card>
+  <Card title="Optimized Performance" icon="rocket">
+    Minimized overheads and platform-specific optimizations ensure peak performance
+  </Card>
+  <Card title="Reduced Attack Surface" icon="shield">
+    Include only necessary components, enhancing security in deployment scenarios
+  </Card>
+  <Card title="Efficient Resources" icon="feather">
+    Smaller footprints mean higher server saturation and improved efficiency
+  </Card>
+</CardGroup>
+
+## Why Unikraft?
+
+In today's computing landscape, efficiency is paramount. Traditional operating systems carry significant overhead with features and drivers your application may never use. Unikraft addresses this by enabling you to build only what you need.
+
+<Note>
+Unikraft's modular design allows developers to create customized, lightweight operating systems tailored to specific application requirements, trimming excess overhead and minimizing attack surfaces.
+</Note>
+
+### Key Benefits
+
+**Modular Design**: Unikraft boasts a modular architecture, allowing developers to include only necessary components. This results in leaner and more efficient operating system configurations.
+
+**Flexible Architecture Support**: With support for x86, ARM, and soon RISC-V architectures, Unikraft offers flexibility in deployment across diverse hardware platforms.
+
+**Broad Language Support**: Extensive support for multiple programming languages including C, C++, Rust, Go, Python, Node.js, and more.
+
+**Cloud and Edge Compatible**: Designed for cloud and edge computing environments, enabling seamless deployment across distributed computing infrastructures.
+
+**Developer Friendly**: Intuitive toolchain and user-friendly interface simplify the development process, allowing developers to focus on building innovative solutions.
+
+**Community-Driven**: Open-source project driven by a vibrant community of over 100 developers from industry and academia.
+
+## Get Started
+
+Ready to build your first unikernel? Choose your path:
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running in under 5 minutes with our quick start guide
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Install the kraft CLI tool on your platform
+  </Card>
+  <Card
+    title="Example Projects"
+    icon="code"
+    href="https://github.com/unikraft/catalog/tree/main/examples"
+  >
+    Browse starter projects in C, C++, Rust, Go, Python, and more
+  </Card>
+  <Card
+    title="Documentation"
+    icon="book"
+    href="https://unikraft.org/docs"
+  >
+    Explore comprehensive documentation and guides
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Unikraft is built on three core principles:
+
+<Steps>
+  <Step title="Modularity">
+    Everything in Unikraft is a library. The core kernel, drivers, filesystems, and even your application are all modular components that can be included or excluded based on your needs.
+  </Step>
+  
+  <Step title="Single Address Space">
+    Unikernels run in a single address space, eliminating the overhead of user-kernel space transitions. This design choice dramatically improves performance for I/O operations.
+  </Step>
+  
+  <Step title="Static Linking">
+    All components are statically linked at build time, enabling aggressive compiler optimizations and dead code elimination.
+  </Step>
+</Steps>
+
+## Use Cases
+
+Unikraft is ideal for:
+
+- **Microservices**: Deploy lightweight, fast-booting services with minimal overhead
+- **Edge Computing**: Run efficient applications in resource-constrained edge environments
+- **Serverless Functions**: Achieve millisecond cold-start times for serverless workloads
+- **Network Functions**: Build high-performance network appliances and functions
+- **Embedded Systems**: Create minimal, security-focused systems for embedded devices
+
+## Performance Highlights
+
+<Tip>
+Unikraft applications typically boot in 1-10 milliseconds and consume 1-10 MB of memory, compared to hundreds of milliseconds and hundreds of megabytes for containerized applications.
+</Tip>
+
+<CodeGroup>
+```bash Boot Time Comparison
+# Traditional Linux Container
+Boot time: ~500ms
+Memory: ~200MB
+
+# Unikraft Unikernel
+Boot time: ~2ms
+Memory: ~5MB
+```
+
+```bash Size Comparison
+# Docker Hello World
+Image size: ~13MB
+Runtime memory: ~200MB
+
+# Unikraft Hello World
+Image size: ~1MB
+Runtime memory: ~2MB
+```
+</CodeGroup>
+
+## Cloud Deployment
+
+The creators of Unikraft have built [KraftCloud](https://kraft.cloud): a next-generation cloud platform powered by technology designed to work in millisecond timescales.
+
+<CardGroup cols={3}>
+  <Card title="Millisecond Scale-to-Zero" icon="check" />
+  <Card title="Millisecond Autoscale" icon="check" />
+  <Card title="Millisecond Cold Boots" icon="check" />
+  <Card title="Higher Throughput" icon="check" />
+  <Card title="Much Lower Cloud Bill" icon="check" />
+  <Card title="HW-Level Isolation" icon="check" />
+</CardGroup>
+
+<Card title="Sign up for the beta" icon="arrow-right" href="https://console.kraft.cloud/signup">
+  Experience the power of unikernels in production
+</Card>
+
+## License and Community
+
+Unikraft is open-source and licensed under BSD-3-Clause. The project is a member of the [Linux Foundation](https://www.linuxfoundation.org/) and is a [Xen Project](https://xenproject.org/) Incubator Project.
+
+<CardGroup cols={2}>
+  <Card
+    title="Join Our Discord"
+    icon="discord"
+    href="https://unikraft.org/discord"
+  >
+    Connect with the community and get support
+  </Card>
+  <Card
+    title="Contribute on GitHub"
+    icon="github"
+    href="https://github.com/unikraft/unikraft"
+  >
+    Contribute to the Unikraft open-source project
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card
+  title="Start Building"
+  icon="play"
+  href="/quickstart"
+>
+  Jump into the quick start guide and run your first unikernel in minutes
+</Card>

@@ -1,0 +1,441 @@
+---
+title: uknetdev
+description: Network device API for Unikraft
+---
+
+## Overview
+
+The `uknetdev` library provides a generalized interface between network device drivers and network stack implementations or low-level network applications in Unikraft. It abstracts network device operations and provides a consistent API for packet transmission, reception, and device management.
+
+The library is derived from DPDK's `rte_ethdev` and provides a clean separation between device drivers and applications, making it easy to support multiple network backends.
+
+## Architecture
+
+### Device States
+
+Network devices in Unikraft progress through four states:
+
+1. **UK_NETDEV_UNPROBED** - Initial state after registration
+2. **UK_NETDEV_UNCONFIGURED** - After successful probing
+3. **UK_NETDEV_CONFIGURED** - After device and queue configuration
+4. **UK_NETDEV_RUNNING** - Device started and operational
+
+### Core Components
+
+- **uk_netdev** - Main device structure containing operations and state
+- **uk_netbuf** - Network buffer abstraction for packet data
+- **RX/TX Queues** - Separate queues for receiving and transmitting packets
+- **Device Operations** - Function pointers for driver-specific implementations
+
+## Device Initialization
+
+Devices must be initialized in the following order:
+
+```c
+#include <uk/netdev.h>
+
+// 1. Get device reference
+struct uk_netdev *dev = uk_netdev_get(0);
+
+// 2. Probe the device
+int ret = uk_netdev_probe(dev);
+if (ret < 0)
+    return ret;
+
+// 3. Query device capabilities
+struct uk_netdev_info info;
+uk_netdev_info_get(dev, &info);
+
+// 4. Configure device
+struct uk_netdev_conf conf = {
+    .nb_rx_queues = 1,
+    .nb_tx_queues = 1
+};
+ret = uk_netdev_configure(dev, &conf);
+
+// 5. Configure RX queue
+struct uk_netdev_rxqueue_conf rxconf = {
+    .a = allocator,
+    .alloc_rxpkts = my_alloc_pkts,
+    .callback = rx_callback,
+};
+ret = uk_netdev_rxq_configure(dev, 0, 256, &rxconf);
+
+// 6. Configure TX queue
+struct uk_netdev_txqueue_conf txconf = {
+    .a = allocator
+};
+ret = uk_netdev_txq_configure(dev, 0, 256, &txconf);
+
+// 7. Start the device
+ret = uk_netdev_start(dev);
+```
+
+## Key API Functions
+
+### Device Management
+
+#### uk_netdev_count
+```c
+unsigned int uk_netdev_count(void);
+```
+Returns the number of registered network devices.
+
+#### uk_netdev_get
+```c
+struct uk_netdev *uk_netdev_get(unsigned int id);
+```
+Gets a reference to a network device by ID. Valid IDs are in range `[0, n-1]` where n is the device count.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:94`
+
+#### uk_netdev_probe
+```c
+int uk_netdev_probe(struct uk_netdev *dev);
+```
+Probes an unprobed device and transitions it to unconfigured state. After probing, device information can be queried.
+
+**Returns:**
+- `0` on success
+- `<0` error code from driver
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:141`
+
+#### uk_netdev_configure
+```c
+int uk_netdev_configure(struct uk_netdev *dev,
+                        const struct uk_netdev_conf *dev_conf);
+```
+Configures the device with the specified number of RX/TX queues.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:193`
+
+#### uk_netdev_start
+```c
+int uk_netdev_start(struct uk_netdev *dev);
+```
+Starts a configured device. After this, TX/RX operations can be performed.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:302`
+
+### Queue Configuration
+
+#### uk_netdev_rxq_configure
+```c
+int uk_netdev_rxq_configure(struct uk_netdev *dev, uint16_t queue_id,
+                            uint16_t nb_desc,
+                            struct uk_netdev_rxqueue_conf *rx_conf);
+```
+Sets up a receive queue with the specified number of descriptors.
+
+**Parameters:**
+- `dev` - Network device in configured state
+- `queue_id` - Queue index `[0, nb_rx_queues-1]`
+- `nb_desc` - Number of descriptors (0 for driver default)
+- `rx_conf` - Queue configuration including allocator and callback
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:240`
+
+#### uk_netdev_txq_configure
+```c
+int uk_netdev_txq_configure(struct uk_netdev *dev, uint16_t queue_id,
+                            uint16_t nb_desc,
+                            struct uk_netdev_txqueue_conf *tx_conf);
+```
+Sets up a transmit queue with the specified number of descriptors.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:284`
+
+### Packet Operations
+
+#### uk_netdev_rx_one
+```c
+static inline int uk_netdev_rx_one(struct uk_netdev *dev, uint16_t queue_id,
+                                   struct uk_netbuf **pkt);
+```
+Receives one packet from the specified queue. This function is optimized for performance and included inline.
+
+**Returns:** Status flags (combination of):
+- `UK_NETDEV_STATUS_SUCCESS` - Packet received successfully
+- `UK_NETDEV_STATUS_MORE` - More packets available
+- `UK_NETDEV_STATUS_UNDERRUN` - Buffer allocation failed
+- `<0` - Error from driver
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:476`
+
+**Example:**
+```c
+struct uk_netbuf *pkt;
+int status;
+
+status = uk_netdev_rx_one(dev, queue_id, &pkt);
+if (uk_netdev_status_successful(status)) {
+    // Process packet
+    process_packet(pkt);
+    
+    if (uk_netdev_status_more(status)) {
+        // More packets available, continue receiving
+    }
+}
+```
+
+#### uk_netdev_tx_one
+```c
+static inline int uk_netdev_tx_one(struct uk_netdev *dev, uint16_t queue_id,
+                                   struct uk_netbuf *pkt);
+```
+Transmits one packet on the specified queue. The driver frees the packet after successful transmission.
+
+**Returns:** Status flags (combination of):
+- `UK_NETDEV_STATUS_SUCCESS` - Packet queued for transmission
+- `UK_NETDEV_STATUS_MORE` - Queue has space for more packets
+- `<0` - Error from driver
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:546`
+
+### Device Properties
+
+#### uk_netdev_hwaddr_get
+```c
+const struct uk_hwaddr *uk_netdev_hwaddr_get(struct uk_netdev *dev);
+```
+Returns the hardware (MAC) address of the device.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:313`
+
+#### uk_netdev_mtu_get / uk_netdev_mtu_set
+```c
+uint16_t uk_netdev_mtu_get(struct uk_netdev *dev);
+int uk_netdev_mtu_set(struct uk_netdev *dev, uint16_t mtu);
+```
+Gets or sets the Maximum Transmission Unit (MTU) for the device.
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:363`, `lib/uknetdev/include/uk/netdev.h:377`
+
+#### uk_netdev_promiscuous_get / uk_netdev_promiscuous_set
+```c
+unsigned uk_netdev_promiscuous_get(struct uk_netdev *dev);
+int uk_netdev_promiscuous_set(struct uk_netdev *dev, unsigned mode);
+```
+Controls promiscuous mode (receive all packets regardless of destination).
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:338`, `lib/uknetdev/include/uk/netdev.h:353`
+
+### Interrupt Management
+
+#### uk_netdev_rxq_intr_enable / uk_netdev_rxq_intr_disable
+```c
+static inline int uk_netdev_rxq_intr_enable(struct uk_netdev *dev,
+                                            uint16_t queue_id);
+static inline int uk_netdev_rxq_intr_disable(struct uk_netdev *dev,
+                                             uint16_t queue_id);
+```
+Enables or disables interrupts for a receive queue.
+
+**Returns:**
+- `0` - Success
+- `1` - (enable only) More packets queued, interrupts not enabled yet
+- `-ENOTSUP` - Driver doesn't support interrupts
+
+**Source:** `lib/uknetdev/include/uk/netdev.h:395`, `lib/uknetdev/include/uk/netdev.h:424`
+
+## Network Buffers (uk_netbuf)
+
+### Structure Overview
+
+The `uk_netbuf` structure represents a packet buffer with the following layout:
+
+```
+*buf -> +----------------------+
+        |      HEAD ROOM       |
+*data -> +----------------------+
+        |     PACKET DATA      |
+        |       (len bytes)    |
+        +----------------------+
+        |      TAIL ROOM       |
+        +----------------------+ <- *buf + buflen
+```
+
+### Allocation Functions
+
+#### uk_netbuf_alloc_buf
+```c
+struct uk_netbuf *uk_netbuf_alloc_buf(struct uk_alloc *a, size_t buflen,
+                                      size_t bufalign, uint16_t headroom,
+                                      size_t privlen, uk_netbuf_dtor_t dtor);
+```
+Allocates a netbuf with an embedded buffer in a single allocation.
+
+**Source:** `lib/uknetdev/include/uk/netbuf.h:315`
+
+### Buffer Manipulation
+
+#### uk_netbuf_header
+```c
+static inline int uk_netbuf_header(struct uk_netbuf *head, int16_t len);
+```
+Adjusts the data pointer by taking from headroom (positive len) or returning to headroom (negative len).
+
+**Source:** `lib/uknetdev/include/uk/netbuf.h:559`
+
+#### uk_netbuf_headroom / uk_netbuf_tailroom
+```c
+static inline size_t uk_netbuf_headroom(struct uk_netbuf *m);
+static inline size_t uk_netbuf_tailroom(struct uk_netbuf *m);
+```
+Returns available space in head or tail room.
+
+**Source:** `lib/uknetdev/include/uk/netbuf.h:520`, `lib/uknetdev/include/uk/netbuf.h:536`
+
+### Chain Management
+
+Netbufs can be chained for scatter-gather operations:
+
+```c
+void uk_netbuf_connect(struct uk_netbuf *headtail,
+                       struct uk_netbuf *tail);
+struct uk_netbuf *uk_netbuf_disconnect(struct uk_netbuf *m);
+```
+
+**Source:** `lib/uknetdev/include/uk/netbuf.h:404`, `lib/uknetdev/include/uk/netbuf.h:445`
+
+## Driver API
+
+For implementing network device drivers, use the functions in `uk/netdev_driver.h`:
+
+### uk_netdev_drv_register
+```c
+int uk_netdev_drv_register(struct uk_netdev *dev, struct uk_alloc *a,
+                           const char *drv_name);
+```
+Registers a network device with the API. Returns the device ID on success.
+
+**Source:** `lib/uknetdev/include/uk/netdev_driver.h:69`
+
+### uk_netdev_drv_rx_event
+```c
+static inline void uk_netdev_drv_rx_event(struct uk_netdev *dev,
+                                          uint16_t queue_id);
+```
+Forwards an RX event to the API user. Should be called from interrupt context.
+
+**Source:** `lib/uknetdev/include/uk/netdev_driver.h:81`
+
+## Features
+
+### Hardware Offloading
+
+The API supports various hardware offload features:
+
+- **UK_NETDEV_F_RXQ_INTR** - RX queue interrupts
+- **UK_NETDEV_F_TXQ_INTR** - TX queue interrupts  
+- **UK_NETDEV_F_PARTIAL_CSUM** - Partial checksum offload
+- **UK_NETDEV_F_TSO4** - TCP Segmentation Offload for IPv4
+- **UK_NETDEV_F_LRO** - Large Receive Offload
+
+**Source:** `lib/uknetdev/include/uk/netdev_core.h:134-152`
+
+### Configuration Options
+
+Key configuration macros:
+- `CONFIG_LIBUKNETDEV_MAXNBQUEUES` - Maximum number of queues per device
+- `CONFIG_LIBUKNETDEV_DISPATCHERTHREADS` - Enable dispatcher threads for events
+- `CONFIG_LIBUKNETDEV_STATS` - Enable statistics collection
+
+## Usage Example
+
+Complete example of setting up and using a network device:
+
+```c
+#include <uk/netdev.h>
+#include <uk/netbuf.h>
+
+static uint16_t alloc_rxpkts(void *argp, struct uk_netbuf *pkts[],
+                             uint16_t count)
+{
+    struct uk_alloc *a = argp;
+    uint16_t i;
+    
+    for (i = 0; i < count; i++) {
+        pkts[i] = uk_netbuf_alloc_buf(a, 2048, 64, 0, 0, NULL);
+        if (!pkts[i])
+            break;
+    }
+    return i;
+}
+
+static void rx_callback(struct uk_netdev *dev, uint16_t queue_id,
+                       void *argp)
+{
+    struct uk_netbuf *pkt;
+    int status;
+    
+    // Receive all available packets
+    do {
+        status = uk_netdev_rx_one(dev, queue_id, &pkt);
+        if (uk_netdev_status_successful(status)) {
+            // Process packet
+            uk_pr_info("Received packet: %u bytes\n", pkt->len);
+            uk_netbuf_free(pkt);
+        }
+    } while (uk_netdev_status_more(status));
+}
+
+int setup_network(struct uk_alloc *a)
+{
+    struct uk_netdev *dev;
+    struct uk_netdev_conf conf;
+    struct uk_netdev_rxqueue_conf rxconf;
+    struct uk_netdev_txqueue_conf txconf;
+    int ret;
+    
+    // Get first network device
+    if (uk_netdev_count() == 0)
+        return -ENODEV;
+    
+    dev = uk_netdev_get(0);
+    
+    // Probe and configure
+    ret = uk_netdev_probe(dev);
+    if (ret < 0)
+        return ret;
+    
+    conf.nb_rx_queues = 1;
+    conf.nb_tx_queues = 1;
+    ret = uk_netdev_configure(dev, &conf);
+    if (ret < 0)
+        return ret;
+    
+    // Setup RX queue
+    rxconf.a = a;
+    rxconf.alloc_rxpkts = alloc_rxpkts;
+    rxconf.alloc_rxpkts_argp = a;
+    rxconf.callback = rx_callback;
+    rxconf.callback_cookie = NULL;
+    
+    ret = uk_netdev_rxq_configure(dev, 0, 256, &rxconf);
+    if (ret < 0)
+        return ret;
+    
+    // Setup TX queue
+    txconf.a = a;
+    ret = uk_netdev_txq_configure(dev, 0, 256, &txconf);
+    if (ret < 0)
+        return ret;
+    
+    // Start device
+    ret = uk_netdev_start(dev);
+    if (ret < 0)
+        return ret;
+    
+    // Enable interrupts
+    uk_netdev_rxq_intr_enable(dev, 0);
+    
+    return 0;
+}
+```
+
+## See Also
+
+- [ukblkdev](/libraries/ukblkdev) - Block device API
+- [virtio](/libraries/virtio) - VirtIO library for paravirtualized devices

@@ -1,80 +1,404 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick Start"
+description: "Run your first ultra-lightweight unikernel in under 5 minutes"
 ---
 
-## Get started in three steps
+## Get up and running fast
 
-Get your documentation site running locally and make your first customization.
+This guide will have you running your first Unikraft unikernel in under 5 minutes. No prior experience with unikernels required.
 
-### Step 1: Set up your local environment
+<Tip>
+Already have `kraft` installed? Jump to [Run your first unikernel](#run-your-first-unikernel).
+</Tip>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Prerequisites
 
-### Step 2: Deploy your changes
+Before you begin, ensure you have:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- A Unix-like operating system (macOS, Linux, or Windows with WSL)
+- Internet connection for downloading the kraft CLI and images
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+For detailed installation instructions including platform-specific requirements, see the [Installation](/installation) guide.
 </Note>
+
+## Install kraft CLI
+
+The `kraft` CLI is your companion tool for building and running Unikraft unikernels. Install it with a single command:
+
+<CodeGroup>
+```bash macOS / Linux / Windows
+curl -sSfL https://get.kraftkit.sh | sh
+```
+
+```bash Homebrew (macOS)
+brew install unikraft/cli/kraftkit
+```
+</CodeGroup>
+
+The interactive installer will automatically:
+
+- Download the appropriate kraft binary for your platform
+- Install it to your system PATH
+- Verify the installation
+
+<Tip>
+If you encounter permission issues, you may need to run with `sudo` or install to a user directory. See the [Installation](/installation) guide for troubleshooting.
+</Tip>
+
+### Verify Installation
+
+Confirm that kraft is installed correctly:
+
+```bash
+kraft version
+```
+
+You should see output showing the kraft version:
+
+```bash
+kraft 0.7.0 ()
+```
+
+## Run your first unikernel
+
+Now for the exciting part! Let's run a pre-built unikernel from the Unikraft community catalog:
+
+```bash
+kraft run unikraft.org/helloworld:latest
+```
+
+This command will:
+
+1. Pull the `helloworld` unikernel image from the Unikraft registry
+2. Launch it in a lightweight virtual machine
+3. Display the output
+
+<Steps>
+  <Step title="First run">
+    On your first run, kraft will download the image. This may take a few seconds depending on your connection.
+  </Step>
+  
+  <Step title="See the output">
+    You should see "Hello, World!" printed to your terminal, followed by boot time metrics showing the unikernel booting in milliseconds.
+  </Step>
+  
+  <Step title="Clean exit">
+    The unikernel will complete execution and exit automatically.
+  </Step>
+</Steps>
+
+### Expected Output
+
+```bash
+[    0.000000] Info: [libkvmplat] <setup.c @  346> Entering from KVM (x86)...
+[    0.000000] Info: [libkvmplat] <setup.c @  101> bootinfo: 0x9f000
+[    0.000000] Info: [libukboot] <boot.c @  128> Unikraft 0.20.0~kiviuq
+[    0.002317] Info: [libukboot] <boot.c @  134> Architecture: x86_64
+[    0.003148] Info: [libukboot] <boot.c @  140> Boot time: 3.148 ms
+Hello, World!
+[    0.005492] Info: [libukboot] <boot.c @  175> Unikraft halted
+```
+
+<Note>
+The exact boot time will vary based on your hardware, but should be in the single-digit millisecond range.
+</Note>
+
+## Manage running instances
+
+Kraft provides Docker-like commands for managing unikernel instances.
+
+### View running instances
+
+List all running instances:
+
+```bash
+kraft ps
+```
+
+### View all instances (including stopped)
+
+```bash
+kraft ps --all
+```
+
+### Stop a running instance
+
+```bash
+kraft stop <instance-name>
+```
+
+### Remove an instance
+
+```bash
+kraft rm <instance-name>
+```
+
+## Explore the catalog
+
+The Unikraft community maintains a catalog of pre-built applications you can run immediately.
+
+### Browse available applications
+
+View all available applications in the community catalog:
+
+```bash
+kraft pkg ls --update --apps
+```
+
+This will display a list of applications across multiple languages:
+
+- C and C++ applications
+- Go web servers and services
+- Python Flask and Django applications
+- Node.js servers
+- Rust applications
+- And more!
+
+### Try more examples
+
+<Tabs>
+  <Tab title="Go HTTP Server">
+    ```bash
+    kraft run unikraft.org/http-go1.21:latest
+    ```
+    
+    A simple HTTP server written in Go using `net/http`.
+  </Tab>
+  
+  <Tab title="Python Flask">
+    ```bash
+    kraft run unikraft.org/http-python3.10-flask3.0:latest
+    ```
+    
+    A Flask 3.0 HTTP web server on Python 3.10.
+  </Tab>
+  
+  <Tab title="Node.js Server">
+    ```bash
+    kraft run unikraft.org/http-node18:latest
+    ```
+    
+    A Node.js 18 HTTP web server.
+  </Tab>
+  
+  <Tab title="Rust Application">
+    ```bash
+    kraft run unikraft.org/helloworld-rs:latest
+    ```
+    
+    A simple Rust application built via `cargo`.
+  </Tab>
+</Tabs>
+
+<Card title="Browse full catalog" icon="github" href="https://github.com/unikraft/catalog/tree/main/examples">
+  Explore all available examples and applications
+</Card>
+
+## Build your first unikernel
+
+Ready to build your own unikernel? You can containerize existing applications by creating a `Kraftfile`.
+
+### Create a Kraftfile
+
+A `Kraftfile` is similar to a Dockerfile and defines how your application should be packaged as a unikernel.
+
+Create a file named `Kraftfile` in your project directory:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/path/to/my-server-app"]
+```
+
+<Steps>
+  <Step title="Specify the spec version">
+    The `spec` field defines which Kraftfile syntax version to use. Use `v0.6` for the latest features.
+  </Step>
+  
+  <Step title="Choose a runtime">
+    The `runtime` specifies the base unikernel runtime. For most applications, `base:latest` provides a POSIX-compatible environment.
+  </Step>
+  
+  <Step title="Define your rootfs">
+    The `rootfs` can point to an existing Dockerfile, allowing you to reuse your container build process.
+  </Step>
+  
+  <Step title="Set the command">
+    The `cmd` specifies which binary to execute when the unikernel boots.
+  </Step>
+</Steps>
+
+### Build and run
+
+Once you have your Kraftfile configured:
+
+```bash
+kraft run .
+```
+
+Kraft will:
+
+1. Build your rootfs from the Dockerfile
+2. Package it with the Unikraft runtime
+3. Launch the resulting unikernel
+
+<Tip>
+For a more detailed guide on building custom unikernels and using advanced Kraftfile features, see the [Kraftfile syntax documentation](https://unikraft.org/docs/cli/reference/kraftfile/latest).
+</Tip>
+
+## Example: Simple C Application
+
+Here's a complete example of building a simple C application as a unikernel.
+
+### Create the application
+
+Create a file named `main.c`:
+
+```c
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+    char str[1024], *p;
+
+    strcpy(str, "There's the way it ought to be");
+    printf("%s\n", str);
+
+    strcat(str, " and there's the way it is");
+    p = strchr(str, 'b');
+    p += 2;
+    fprintf(stderr, "%s\n", p);
+
+    return 0;
+}
+```
+
+### Create a Dockerfile
+
+Create a `Dockerfile` to build your application:
+
+```dockerfile
+FROM gcc:latest AS build
+
+WORKDIR /app
+COPY main.c .
+RUN gcc -o myapp main.c
+
+FROM scratch
+COPY --from=build /app/myapp /myapp
+```
+
+### Create a Kraftfile
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/myapp"]
+```
+
+### Build and run
+
+```bash
+kraft run .
+```
+
+Your application will be packaged as a unikernel and executed!
+
+## Try in the cloud
+
+Want to try Unikraft without installing anything? Use GitHub Codespaces:
+
+<Card title="Open in GitHub Codespaces" icon="github" href="https://codespaces.new/unikraft/catalog">
+  Launch a pre-configured development environment in your browser
+</Card>
+
+## Container build environment
+
+Prefer to use Docker? Run kraft in a container with all dependencies included:
+
+```bash
+docker run --platform linux/x86_64 -it --rm \
+  -v $(pwd):/workspace \
+  --entrypoint bash \
+  kraftkit.sh/base:latest
+```
+
+This command:
+
+- Mounts your current directory to `/workspace` in the container
+- Drops you into a bash shell with kraft pre-installed
+- Includes all build dependencies for emulation mode
+
+<Warning>
+Type `exit` or press Ctrl+D to quit the container shell.
+</Warning>
+
+## Next Steps
+
+Now that you've run your first unikernel, explore these resources:
+
+<CardGroup cols={2}>
+  <Card
+    title="Installation Details"
+    icon="download"
+    href="/installation"
+  >
+    Learn about platform-specific installation and configuration
+  </Card>
+  
+  <Card
+    title="Kraftfile Reference"
+    icon="file-code"
+    href="https://unikraft.org/docs/cli/reference/kraftfile/latest"
+  >
+    Master the Kraftfile syntax and advanced features
+  </Card>
+  
+  <Card
+    title="Example Projects"
+    icon="folder-open"
+    href="https://github.com/unikraft/catalog/tree/main/examples"
+  >
+    Browse complete example applications
+  </Card>
+  
+  <Card
+    title="Deploy to KraftCloud"
+    icon="cloud"
+    href="https://kraft.cloud"
+  >
+    Deploy your unikernels to production
+  </Card>
+</CardGroup>
+
+## Getting Help
+
+Need assistance?
+
+<CardGroup cols={2}>
+  <Card
+    title="Join Discord"
+    icon="discord"
+    href="https://unikraft.org/discord"
+  >
+    Get help from the community
+  </Card>
+  
+  <Card
+    title="Browse Documentation"
+    icon="book"
+    href="https://unikraft.org/docs"
+  >
+    Explore comprehensive guides
+  </Card>
+</CardGroup>

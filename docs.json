@@ -1,122 +1,166 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Unikraft",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#EC591A",
+    "light": "#FF7A3D",
+    "dark": "#C5491A"
   },
   "favicon": "/favicon.svg",
-  "navigation": {
-    "tabs": [
-      {
-        "tab": "Guides",
-        "groups": [
-          {
-            "group": "Getting started",
-            "pages": [
-              "index",
-              "quickstart",
-              "development"
-            ]
-          },
-          {
-            "group": "Customization",
-            "pages": [
-              "essentials/settings",
-              "essentials/navigation"
-            ]
-          },
-          {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "API reference",
-        "groups": [
-          {
-            "group": "API documentation",
-            "pages": [
-              "api-reference/introduction"
-            ]
-          },
-          {
-            "group": "Endpoint examples",
-            "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
-            ]
-          }
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
   "logo": {
     "light": "/logo/light.svg",
     "dark": "/logo/dark.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/unikraft/unikraft"
     }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/unikraft/unikraft",
+      "discord": "https://bit.ly/UnikraftDiscord",
+      "x": "https://x.com/UnikraftSDK"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/unikernels",
+              "concepts/architecture",
+              "concepts/modular-design",
+              "concepts/build-system"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-applications",
+              "guides/kraftfile-syntax",
+              "guides/configuration",
+              "guides/running-unikernels",
+              "guides/debugging"
+            ]
+          },
+          {
+            "group": "Platform Support",
+            "pages": [
+              "platforms/overview",
+              "platforms/kvm",
+              "platforms/xen",
+              "platforms/cloud-deployment"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/x86-64",
+              "architecture/arm64",
+              "architecture/arm32"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Internal Libraries",
+        "groups": [
+          {
+            "group": "Core Libraries",
+            "pages": [
+              "libraries/overview",
+              "libraries/ukboot",
+              "libraries/ukalloc",
+              "libraries/uksched",
+              "libraries/ukdebug"
+            ]
+          },
+          {
+            "group": "System Libraries",
+            "pages": [
+              "libraries/nolibc",
+              "libraries/syscall-shim",
+              "libraries/posix-compatibility"
+            ]
+          },
+          {
+            "group": "Memory Management",
+            "pages": [
+              "libraries/ukvmem",
+              "libraries/ukmmap",
+              "libraries/allocators"
+            ]
+          },
+          {
+            "group": "Networking & I/O",
+            "pages": [
+              "libraries/uknetdev",
+              "libraries/ukblkdev",
+              "libraries/virtio"
+            ]
+          },
+          {
+            "group": "File Systems",
+            "pages": [
+              "libraries/vfs",
+              "libraries/9pfs",
+              "libraries/ramfs",
+              "libraries/devfs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Drivers",
+        "groups": [
+          {
+            "group": "Device Drivers",
+            "pages": [
+              "drivers/overview",
+              "drivers/virtio",
+              "drivers/console",
+              "drivers/interrupt-controllers",
+              "drivers/bus-systems"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "development/contributing",
+              "development/coding-conventions",
+              "development/submitting-patches"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/porting-applications",
+              "advanced/creating-libraries",
+              "advanced/platform-development",
+              "advanced/performance-optimization"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

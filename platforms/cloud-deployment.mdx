@@ -1,0 +1,1004 @@
+---
+title: "Cloud Deployment with KraftCloud"
+description: "Deploy Unikraft unikernels to production with KraftCloud"
+---
+
+## What is KraftCloud?
+
+[KraftCloud](https://kraft.cloud) is a next-generation cloud platform built by the creators of Unikraft, designed from the ground up to leverage the unique capabilities of unikernel technology. It provides millisecond-scale operations for cold boots, scale-to-zero, and autoscaling.
+
+<Info>
+KraftCloud is purpose-built for Unikraft unikernels, offering unprecedented performance and efficiency compared to traditional container or VM-based clouds.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Millisecond Cold Boots" icon="bolt">
+    Boot new instances in milliseconds, not seconds or minutes
+  </Card>
+  
+  <Card title="Millisecond Scale-to-Zero" icon="gauge-high">
+    Scale down to zero instantly when idle, paying only for actual usage
+  </Card>
+  
+  <Card title="Millisecond Autoscale" icon="arrows-up-down">
+    Respond to load changes in milliseconds with instant scaling
+  </Card>
+  
+  <Card title="Higher Throughput" icon="rocket">
+    Achieve better performance with minimal overhead
+  </Card>
+  
+  <Card title="Lower Cloud Bill" icon="dollar-sign">
+    Pay only for actual compute time with millisecond granularity
+  </Card>
+  
+  <Card title="Hardware Isolation" icon="shield">
+    Each instance runs with hardware-level isolation for security
+  </Card>
+  
+  <Card title="Docker Compatible" icon="docker">
+    Works with existing Docker and Kubernetes workflows
+  </Card>
+  
+  <Card title="Terraform Integration" icon="code">
+    Infrastructure-as-code support with Terraform provider
+  </Card>
+</CardGroup>
+
+## Getting Started
+
+### Prerequisites
+
+<Steps>
+  <Step title="Install kraft CLI">
+    ```bash
+    # Install on macOS, Linux, and Windows
+    curl -sSfL https://get.kraftkit.sh | sh
+    
+    # Or via Homebrew (macOS)
+    brew install unikraft/cli/kraftkit
+    ```
+  </Step>
+  
+  <Step title="Sign up for KraftCloud">
+    Create your account at [console.kraft.cloud/signup](https://console.kraft.cloud/signup)
+    
+    <Note>
+    KraftCloud is currently in beta. Sign up to get early access.
+    </Note>
+  </Step>
+  
+  <Step title="Authenticate kraft CLI">
+    ```bash
+    # Login to KraftCloud
+    kraft cloud login
+    
+    # Verify authentication
+    kraft cloud whoami
+    ```
+  </Step>
+</Steps>
+
+## Deploying Your First Application
+
+### From a Dockerfile
+
+The easiest way to deploy is from an existing Dockerfile:
+
+<Steps>
+  <Step title="Create a Kraftfile">
+    Create a `Kraftfile` in your project directory:
+    
+    ```yaml
+    spec: v0.6
+    
+    runtime: base:latest
+    
+    rootfs: ./Dockerfile
+    
+    cmd: ["/path/to/your-app"]
+    ```
+  </Step>
+  
+  <Step title="Build the unikernel">
+    ```bash
+    # Build locally first (optional but recommended)
+    kraft build
+    
+    # Package for deployment
+    kraft pkg
+    ```
+  </Step>
+  
+  <Step title="Deploy to KraftCloud">
+    ```bash
+    # Deploy to production
+    kraft cloud deploy -p 443:8080 .
+    
+    # Output will show your service URL:
+    # https://your-app-xyz.fra0.kraft.cloud
+    ```
+  </Step>
+</Steps>
+
+### From Pre-built Images
+
+Deploy from the community catalog:
+
+```bash
+# List available images
+kraft pkg ls --update --apps
+
+# Deploy directly from catalog
+kraft cloud deploy --port 443:8080 unikraft.org/nginx:latest
+
+# Or run locally first to test
+kraft run unikraft.org/nginx:latest
+```
+
+## Advanced Deployment
+
+### Using kraft cloud deploy
+
+The `kraft cloud deploy` command provides extensive options:
+
+<Tabs>
+  <Tab title="Basic Deployment">
+    ```bash
+    # Deploy with port mapping
+    kraft cloud deploy -p 443:8080 .
+    
+    # Deploy with custom name
+    kraft cloud deploy --name my-app -p 443:8080 .
+    
+    # Deploy with memory limit
+    kraft cloud deploy -p 443:8080 -M 256M .
+    
+    # Deploy with environment variables
+    kraft cloud deploy -p 443:8080 \
+        -e DATABASE_URL=postgres://... \
+        -e API_KEY=secret \
+        .
+    ```
+  </Tab>
+  
+  <Tab title="Advanced Options">
+    ```bash
+    # Deploy with multiple instances (scale out)
+    kraft cloud deploy -p 443:8080 --replicas 3 .
+    
+    # Deploy with autoscaling
+    kraft cloud deploy -p 443:8080 \
+        --min-scale 0 \
+        --max-scale 10 \
+        --scale-threshold 80 \
+        .
+    
+    # Deploy with specific region
+    kraft cloud deploy -p 443:8080 --region fra0 .
+    
+    # Deploy with volumes
+    kraft cloud deploy -p 443:8080 \
+        --volume /data:/mnt/data \
+        .
+    ```
+  </Tab>
+  
+  <Tab title="Production Config">
+    ```bash
+    # Full production deployment
+    kraft cloud deploy \
+        --name my-prod-app \
+        --port 443:8080 \
+        --memory 512M \
+        --replicas 5 \
+        --min-scale 1 \
+        --max-scale 20 \
+        --scale-threshold 75 \
+        --region fra0 \
+        --env DATABASE_URL=postgres://... \
+        --env CACHE_URL=redis://... \
+        --volume /data:/mnt/persistent \
+        --restart always \
+        .
+    ```
+  </Tab>
+</Tabs>
+
+### Configuration via Kraftfile
+
+Define deployment configuration in your Kraftfile:
+
+```yaml
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/app/server"]
+
+# Deployment configuration
+cloud:
+  memory: 512M
+  replicas: 3
+  autoscale:
+    min: 0
+    max: 10
+    threshold: 80
+  ports:
+    - 443:8080
+  env:
+    - DATABASE_URL=postgres://db.kraft.cloud/mydb
+    - CACHE_ENABLED=true
+  volumes:
+    - /data:/mnt/data
+  region: fra0
+```
+
+Deploy with:
+```bash
+kraft cloud deploy
+```
+
+## Service Management
+
+### Viewing Services
+
+<Tabs>
+  <Tab title="List Services">
+    ```bash
+    # List all services
+    kraft cloud service ls
+    
+    # List with details
+    kraft cloud service ls --verbose
+    
+    # Filter by status
+    kraft cloud service ls --status running
+    ```
+  </Tab>
+  
+  <Tab title="Service Details">
+    ```bash
+    # Get service info
+    kraft cloud service get <service-name>
+    
+    # View service logs
+    kraft cloud service logs <service-name>
+    
+    # Follow logs in real-time
+    kraft cloud service logs -f <service-name>
+    
+    # View metrics
+    kraft cloud service metrics <service-name>
+    ```
+  </Tab>
+  
+  <Tab title="Service Actions">
+    ```bash
+    # Stop service
+    kraft cloud service stop <service-name>
+    
+    # Start service
+    kraft cloud service start <service-name>
+    
+    # Restart service
+    kraft cloud service restart <service-name>
+    
+    # Delete service
+    kraft cloud service rm <service-name>
+    ```
+  </Tab>
+</Tabs>
+
+### Scaling Services
+
+<Tabs>
+  <Tab title="Manual Scaling">
+    ```bash
+    # Scale to specific number of instances
+    kraft cloud service scale <service-name> --replicas 5
+    
+    # Scale to zero (scale-to-zero)
+    kraft cloud service scale <service-name> --replicas 0
+    
+    # Scale back up instantly when needed
+    kraft cloud service scale <service-name> --replicas 3
+    ```
+  </Tab>
+  
+  <Tab title="Autoscaling">
+    ```bash
+    # Enable autoscaling
+    kraft cloud service autoscale <service-name> \
+        --min 0 \
+        --max 10 \
+        --threshold 75
+    
+    # Update autoscale config
+    kraft cloud service autoscale <service-name> \
+        --min 2 \
+        --max 20 \
+        --threshold 80
+    
+    # Disable autoscaling
+    kraft cloud service autoscale <service-name> --disable
+    ```
+  </Tab>
+</Tabs>
+
+## Networking
+
+### Domains and DNS
+
+<Tabs>
+  <Tab title="Default Domain">
+    Every service gets a default domain:
+    ```
+    https://<service-name>-<hash>.<region>.kraft.cloud
+    ```
+    
+    Example:
+    ```
+    https://my-app-a1b2c3.fra0.kraft.cloud
+    ```
+  </Tab>
+  
+  <Tab title="Custom Domains">
+    ```bash
+    # Add custom domain
+    kraft cloud domain create my-app.example.com
+    
+    # Point to service
+    kraft cloud domain attach my-app.example.com <service-name>
+    
+    # List domains
+    kraft cloud domain ls
+    
+    # Remove domain
+    kraft cloud domain rm my-app.example.com
+    ```
+    
+    Configure DNS with provided CNAME:
+    ```
+    my-app.example.com CNAME <service-name>.fra0.kraft.cloud
+    ```
+  </Tab>
+  
+  <Tab title="TLS Certificates">
+    ```bash
+    # TLS is automatic for *.kraft.cloud domains
+    # For custom domains, certificates are auto-provisioned
+    
+    # Upload custom certificate
+    kraft cloud cert create \
+        --domain my-app.example.com \
+        --cert cert.pem \
+        --key key.pem
+    
+    # List certificates
+    kraft cloud cert ls
+    ```
+  </Tab>
+</Tabs>
+
+### Load Balancing
+
+KraftCloud automatically load balances across replicas:
+
+- **Round-robin**: Default distribution strategy
+- **Session affinity**: Sticky sessions when needed
+- **Health checks**: Automatic unhealthy instance removal
+- **Zero-downtime deploys**: Rolling updates with no service interruption
+
+```bash
+# Deploy with load balancing
+kraft cloud deploy -p 443:8080 --replicas 5 .
+
+# Traffic automatically distributed across all 5 instances
+```
+
+### Service-to-Service Communication
+
+<Tabs>
+  <Tab title="Internal DNS">
+    ```bash
+    # Services can communicate via internal DNS
+    # Format: <service-name>.kraft.internal
+    
+    # Example in your application:
+    DATABASE_URL=postgres://db.kraft.internal:5432/mydb
+    CACHE_URL=redis://cache.kraft.internal:6379
+    ```
+  </Tab>
+  
+  <Tab title="Service Mesh">
+    ```yaml
+    # Define service dependencies in Kraftfile
+    spec: v0.6
+    
+    runtime: base:latest
+    
+    cloud:
+      services:
+        - name: api
+          port: 8080
+          depends_on:
+            - database
+            - cache
+        
+        - name: database
+          image: postgres:latest
+          port: 5432
+        
+        - name: cache
+          image: redis:latest
+          port: 6379
+    ```
+  </Tab>
+</Tabs>
+
+## Storage and Volumes
+
+### Persistent Volumes
+
+<Tabs>
+  <Tab title="Create Volume">
+    ```bash
+    # Create a persistent volume
+    kraft cloud volume create my-data --size 10G
+    
+    # List volumes
+    kraft cloud volume ls
+    
+    # Volume details
+    kraft cloud volume get my-data
+    ```
+  </Tab>
+  
+  <Tab title="Attach to Service">
+    ```bash
+    # Deploy with volume
+    kraft cloud deploy -p 443:8080 \
+        --volume my-data:/mnt/data \
+        .
+    
+    # Or in Kraftfile:
+    # volumes:
+    #   - my-data:/mnt/data
+    ```
+  </Tab>
+  
+  <Tab title="Manage Volumes">
+    ```bash
+    # Resize volume
+    kraft cloud volume resize my-data --size 20G
+    
+    # Snapshot volume
+    kraft cloud volume snapshot my-data --name backup-2024
+    
+    # Delete volume
+    kraft cloud volume rm my-data
+    ```
+  </Tab>
+</Tabs>
+
+### Object Storage
+
+<Note>
+Object storage integration coming soon. Use external S3-compatible services in the meantime.
+</Note>
+
+## Monitoring and Observability
+
+### Logs
+
+<Tabs>
+  <Tab title="View Logs">
+    ```bash
+    # Tail logs
+    kraft cloud service logs -f <service-name>
+    
+    # View last 100 lines
+    kraft cloud service logs --tail 100 <service-name>
+    
+    # Logs from specific instance
+    kraft cloud instance logs <instance-id>
+    
+    # Export logs
+    kraft cloud service logs <service-name> > logs.txt
+    ```
+  </Tab>
+  
+  <Tab title="Log Filtering">
+    ```bash
+    # Filter by time range
+    kraft cloud service logs <service-name> \
+        --since 2024-01-01T00:00:00 \
+        --until 2024-01-02T00:00:00
+    
+    # Filter by severity
+    kraft cloud service logs <service-name> --level error
+    
+    # Search logs
+    kraft cloud service logs <service-name> --grep "error"
+    ```
+  </Tab>
+</Tabs>
+
+### Metrics
+
+```bash
+# View service metrics
+kraft cloud service metrics <service-name>
+
+# Metrics include:
+# - Request rate (requests/sec)
+# - Response time (ms)
+# - CPU usage (%)
+# - Memory usage (MB)
+# - Network I/O (MB/s)
+# - Error rate (%)
+
+# Export metrics for analysis
+kraft cloud service metrics <service-name> --format json > metrics.json
+```
+
+### Alerts
+
+```bash
+# Create alert
+kraft cloud alert create \
+    --service <service-name> \
+    --metric cpu_usage \
+    --threshold 80 \
+    --action email \
+    --email admin@example.com
+
+# List alerts
+kraft cloud alert ls
+
+# Disable alert
+kraft cloud alert disable <alert-id>
+```
+
+## Deployment Strategies
+
+### Blue-Green Deployment
+
+<Steps>
+  <Step title="Deploy new version (green)">
+    ```bash
+    # Deploy new version with different name
+    kraft cloud deploy --name my-app-green -p 443:8080 .
+    ```
+  </Step>
+  
+  <Step title="Test green deployment">
+    ```bash
+    # Test at: https://my-app-green-xyz.fra0.kraft.cloud
+    curl https://my-app-green-xyz.fra0.kraft.cloud/health
+    ```
+  </Step>
+  
+  <Step title="Switch traffic">
+    ```bash
+    # Update domain to point to green
+    kraft cloud domain attach my-app.example.com my-app-green
+    ```
+  </Step>
+  
+  <Step title="Remove old version (blue)">
+    ```bash
+    # Once confident, remove old version
+    kraft cloud service rm my-app-blue
+    ```
+  </Step>
+</Steps>
+
+### Canary Deployment
+
+```bash
+# Deploy canary version
+kraft cloud deploy --name my-app-canary -p 443:8080 .
+
+# Route 10% of traffic to canary
+kraft cloud service route my-app \
+    --weight 90 my-app-stable \
+    --weight 10 my-app-canary
+
+# Gradually increase canary traffic
+kraft cloud service route my-app \
+    --weight 50 my-app-stable \
+    --weight 50 my-app-canary
+
+# Promote canary to stable
+kraft cloud service route my-app --weight 100 my-app-canary
+```
+
+### Rolling Updates
+
+```bash
+# Update existing service with zero downtime
+kraft cloud deploy --name my-app \
+    --strategy rolling \
+    --max-unavailable 1 \
+    .
+
+# KraftCloud will:
+# 1. Start new instances
+# 2. Wait for health checks
+# 3. Gradually shift traffic
+# 4. Terminate old instances
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+Create `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to KraftCloud
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install kraft
+        run: |
+          curl -sSfL https://get.kraftkit.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: Login to KraftCloud
+        env:
+          KRAFTCLOUD_TOKEN: ${{ secrets.KRAFTCLOUD_TOKEN }}
+        run: kraft cloud login --token $KRAFTCLOUD_TOKEN
+      
+      - name: Build and deploy
+        run: |
+          kraft build
+          kraft cloud deploy -p 443:8080 .
+      
+      - name: Health check
+        run: |
+          sleep 5
+          curl -f https://my-app.fra0.kraft.cloud/health
+```
+
+### GitLab CI
+
+Create `.gitlab-ci.yml`:
+
+```yaml
+stages:
+  - build
+  - deploy
+
+deploy:
+  stage: deploy
+  image: kraftcloud/kraft:latest
+  script:
+    - kraft cloud login --token $KRAFTCLOUD_TOKEN
+    - kraft build
+    - kraft cloud deploy -p 443:8080 .
+  only:
+    - main
+  environment:
+    name: production
+    url: https://my-app.fra0.kraft.cloud
+```
+
+### Terraform
+
+Use the KraftCloud Terraform provider:
+
+```hcl
+terraform {
+  required_providers {
+    kraftcloud = {
+      source  = "kraftcloud/kraftcloud"
+      version = "~> 1.0"
+    }
+  }
+}
+
+provider "kraftcloud" {
+  token = var.kraftcloud_token
+}
+
+resource "kraftcloud_service" "app" {
+  name   = "my-app"
+  image  = "my-registry.kraft.cloud/my-app:latest"
+  
+  port {
+    external = 443
+    internal = 8080
+  }
+  
+  memory   = "512M"
+  replicas = 3
+  
+  autoscale {
+    min       = 1
+    max       = 10
+    threshold = 75
+  }
+  
+  env = {
+    DATABASE_URL = var.database_url
+    API_KEY      = var.api_key
+  }
+}
+
+resource "kraftcloud_domain" "app" {
+  domain  = "my-app.example.com"
+  service = kraftcloud_service.app.name
+}
+
+output "service_url" {
+  value = kraftcloud_service.app.url
+}
+```
+
+## Cost Optimization
+
+### Millisecond Billing
+
+KraftCloud bills per millisecond of actual compute time:
+
+```
+Cost = (Memory Size) × (Execution Time) × (Regional Rate)
+
+Example:
+512MB × 100ms × $0.00001/GB-second = $0.0000005 per request
+```
+
+### Scale-to-Zero
+
+Automatically scale to zero when idle:
+
+```bash
+# Configure scale-to-zero
+kraft cloud deploy -p 443:8080 \
+    --min-scale 0 \
+    --idle-timeout 30s \
+    .
+
+# Service scales to zero after 30s of no requests
+# Scales back up in milliseconds when new request arrives
+```
+
+**Cost savings**:
+- No charges during idle time
+- Pay only for actual request handling
+- Instant scale-up (no cold start penalty)
+
+### Right-Sizing
+
+Monitor and adjust resources:
+
+```bash
+# View resource usage
+kraft cloud service metrics my-app
+
+# Adjust memory allocation
+kraft cloud service update my-app --memory 256M
+
+# Optimize based on metrics
+# - If CPU < 30%: Consider smaller instance
+# - If memory < 50%: Reduce memory allocation
+# - If response time > SLA: Increase resources
+```
+
+## Security
+
+### Network Isolation
+
+<CardGroup cols={2}>
+  <Card title="Private Networks" icon="lock">
+    Isolate services in private networks
+    
+    ```bash
+    kraft cloud network create private-net
+    kraft cloud deploy --network private-net .
+    ```
+  </Card>
+  
+  <Card title="Firewall Rules" icon="shield-halved">
+    Control inbound/outbound traffic
+    
+    ```bash
+    kraft cloud firewall create \
+        --allow-port 443 \
+        --deny-all
+    ```
+  </Card>
+</CardGroup>
+
+### Secrets Management
+
+<Tabs>
+  <Tab title="Create Secrets">
+    ```bash
+    # Create secret
+    kraft cloud secret create DB_PASSWORD "my-secret-password"
+    
+    # Create from file
+    kraft cloud secret create API_KEY --from-file=./api-key.txt
+    
+    # List secrets
+    kraft cloud secret ls
+    ```
+  </Tab>
+  
+  <Tab title="Use Secrets">
+    ```bash
+    # Reference in deployment
+    kraft cloud deploy -p 443:8080 \
+        --env-secret DATABASE_PASSWORD=DB_PASSWORD \
+        --env-secret API_KEY=API_KEY \
+        .
+    
+    # Or in Kraftfile:
+    # cloud:
+    #   secrets:
+    #     - DATABASE_PASSWORD: DB_PASSWORD
+    #     - API_KEY: API_KEY
+    ```
+  </Tab>
+</Tabs>
+
+### Access Control
+
+```bash
+# Manage team access
+kraft cloud team invite user@example.com --role developer
+
+# Roles:
+# - admin: Full access
+# - developer: Deploy and manage services
+# - viewer: Read-only access
+
+# Service-level access
+kraft cloud service permissions my-app \
+    --grant developer@example.com deploy,logs
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Application Design" icon="diagram-project">
+    - **Stateless design**: Store state externally (database, cache)
+    - **Fast startup**: Optimize initialization for quick scale-up
+    - **Health checks**: Implement `/health` endpoint
+    - **Graceful shutdown**: Handle SIGTERM for clean termination
+    - **12-factor principles**: Follow cloud-native best practices
+  </Accordion>
+  
+  <Accordion title="Deployment" icon="rocket">
+    - **Test locally first**: Use `kraft run` before deploying
+    - **Use CI/CD**: Automate deployments for consistency
+    - **Blue-green or canary**: Use progressive deployment strategies
+    - **Monitor deployments**: Watch metrics during rollout
+    - **Rollback plan**: Keep previous version ready
+  </Accordion>
+  
+  <Accordion title="Scaling" icon="arrows-up-down">
+    - **Start small**: Begin with minimal resources, scale as needed
+    - **Enable autoscaling**: Let platform handle load changes
+    - **Scale horizontally**: Add instances rather than increasing size
+    - **Use scale-to-zero**: Reduce costs during idle periods
+    - **Monitor metrics**: Adjust scaling thresholds based on actual usage
+  </Accordion>
+  
+  <Accordion title="Cost Management" icon="dollar-sign">
+    - **Right-size instances**: Don't over-provision resources
+    - **Use scale-to-zero**: Eliminate idle costs
+    - **Optimize cold boot**: Faster startups = lower costs
+    - **Monitor spend**: Track costs per service
+    - **Set budgets**: Configure spend alerts
+  </Accordion>
+</AccordionGroup>
+
+## Migration from Other Platforms
+
+### From AWS Lambda
+
+```bash
+# Lambda function -> KraftCloud
+# 1. Package as Docker image
+# 2. Create Kraftfile pointing to Dockerfile
+# 3. Deploy
+
+kraft cloud deploy -p 443:8080 .
+
+# Benefits:
+# - Faster cold starts
+# - No 15-minute timeout
+# - Better price/performance
+```
+
+### From Kubernetes
+
+```bash
+# Existing K8s deployment -> KraftCloud
+# 1. Extract Dockerfile from container image
+# 2. Create Kraftfile
+# 3. Deploy
+
+kraft cloud deploy \
+    --replicas <replica-count> \
+    --memory <memory-limit> \
+    -p 443:<port> \
+    .
+
+# Benefits:
+# - Simpler operations
+# - Lower overhead
+# - Faster scaling
+```
+
+### From Docker/Docker Compose
+
+```bash
+# Docker Compose -> KraftCloud
+# 1. Keep Dockerfile unchanged
+# 2. Create Kraftfile referencing Dockerfile
+# 3. Deploy each service
+
+kraft cloud deploy -p 443:8080 --name web ./web
+kraft cloud deploy -p 5432:5432 --name db ./db
+
+# Connect via internal DNS:
+# DATABASE_URL=postgres://db.kraft.internal:5432
+```
+
+## Support and Resources
+
+<CardGroup cols={2}>
+  <Card title="Documentation" icon="book" href="https://docs.kraft.cloud">
+    Complete KraftCloud documentation
+  </Card>
+  
+  <Card title="Discord Community" icon="discord" href="https://unikraft.org/discord">
+    Join the Unikraft community for support
+  </Card>
+  
+  <Card title="Status Page" icon="signal" href="https://status.kraft.cloud">
+    KraftCloud service status
+  </Card>
+  
+  <Card title="Support" icon="life-ring" href="https://kraft.cloud/support">
+    Get help from the KraftCloud team
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Build Your First App" icon="rocket" href="/guides">
+    Create and deploy a Unikraft application
+  </Card>
+  
+  <Card title="KVM Platform" icon="server" href="/platforms/kvm">
+    Understand the underlying platform
+  </Card>
+  
+  <Card title="Examples" icon="code" href="https://github.com/unikraft/catalog">
+    Browse example applications
+  </Card>
+  
+  <Card title="API Reference" icon="book-open" href="/api-reference">
+    Explore the KraftCloud API
+  </Card>
+</CardGroup>

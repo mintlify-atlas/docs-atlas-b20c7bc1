@@ -1,0 +1,421 @@
+---
+title: x86_64 Architecture
+description: Comprehensive documentation for Unikraft's x86_64 architecture support
+---
+
+## Overview
+
+Unikraft provides comprehensive support for the x86_64 (AMD64) architecture, implementing a modern 64-bit execution environment with support for advanced CPU features including SSE, AVX, and memory protection mechanisms.
+
+The x86_64 architecture implementation is located in `arch/x86/x86_64/` and provides:
+
+- 64-bit long mode operation
+- Advanced memory management with 4-level or 5-level paging
+- Context switching and thread management
+- Extended state management (FPU, SSE, AVX)
+- System register access and control
+- Interrupt and exception handling
+
+## Architecture-Specific Headers
+
+The x86_64 implementation is organized into several key header files:
+
+### Core Headers
+
+- **`uk/asm/arch.h`**: Architecture-specific definitions (source:arch/x86/x86_64/include/uk/asm/arch.h:1)
+- **`uk/asm/lcpu.h`**: CPU control and register structures (source:arch/x86/x86_64/include/uk/asm/lcpu.h:1)
+- **`uk/asm/paging.h`**: Memory management and page tables (source:arch/x86/x86_64/include/uk/asm/paging.h:1)
+- **`uk/asm/ctx.h`**: Context switching support (source:arch/x86/x86_64/include/uk/asm/ctx.h:1)
+
+## CPU Features and Control Registers
+
+### EFLAGS Register
+
+The EFLAGS register contains various CPU status and control flags:
+
+```c
+#define X86_EFLAGS_CF    (1 <<  0)   /* carry flag */
+#define X86_EFLAGS_PF    (1 <<  2)   /* parity flag */
+#define X86_EFLAGS_ZF    (1 <<  6)   /* zero flag */
+#define X86_EFLAGS_IF    (1 <<  9)   /* interrupt flag */
+#define X86_EFLAGS_DF    (1 << 10)   /* direction flag */
+```
+
+### Control Registers
+
+#### CR0 - System Control Register
+
+```c
+#define X86_CR0_PE    (1 << 0)    /* Protection Enable */
+#define X86_CR0_MP    (1 << 1)    /* Monitor Coprocessor */
+#define X86_CR0_EM    (1 << 2)    /* Emulation */
+#define X86_CR0_WP    (1 << 16)   /* Write Protect */
+#define X86_CR0_PG    (1 << 31)   /* Paging */
+```
+
+#### CR4 - Extended Features
+
+CR4 enables various CPU extensions (source:arch/x86/x86_64/include/uk/asm/arch.h:47):
+
+```c
+#define X86_CR4_PAE         (1 << 5)    /* Physical Address Extension */
+#define X86_CR4_OSFXSR      (1 << 9)    /* FXSAVE/FXRSTOR support */
+#define X86_CR4_OSXMMEXCPT  (1 << 10)   /* SSE exception support */
+#define X86_CR4_FSGSBASE    (1 << 16)   /* FS/GS BASE instructions */
+#define X86_CR4_OSXSAVE     (1 << 18)   /* XSAVE support */
+#define X86_CR4_PKE         (1 << 22)   /* Protection keys */
+```
+
+### Model-Specific Registers (MSRs)
+
+Key MSRs for x86_64 operation (source:arch/x86/x86_64/include/uk/asm/arch.h:72):
+
+```c
+#define X86_MSR_FS_BASE         0xc0000100  /* FS base register */
+#define X86_MSR_GS_BASE         0xc0000101  /* GS base register */
+#define X86_MSR_KERNEL_GS_BASE  0xc0000102  /* Kernel GS base */
+#define X86_MSR_EFER            0xc0000080  /* Extended features */
+#define X86_MSR_LSTAR           0xc0000082  /* SYSCALL target */
+#define X86_MSR_PAT             0x277       /* Page attribute table */
+```
+
+## Register Structure
+
+### General Purpose Registers
+
+The `__regs` structure defines the register layout for context saving (source:arch/x86/x86_64/include/uk/asm/lcpu.h:86):
+
+```c
+struct __regs {
+    unsigned long pad;
+    unsigned long r15, r14, r13, r12;
+    unsigned long rbp, rbx;
+    unsigned long r11, r10, r9, r8;
+    unsigned long rax, rcx, rdx, rsi, rdi;
+    unsigned long orig_rax;
+    unsigned long rip;      /* Instruction pointer */
+    unsigned long cs;       /* Code segment */
+    unsigned long eflags;   /* Flags register */
+    unsigned long rsp;      /* Stack pointer */
+    unsigned long ss;       /* Stack segment */
+};
+```
+
+### Function Calling Convention
+
+x86_64 follows the AMD64 SysV ABI (source:arch/x86/x86_64/include/uk/asm/lcpu.h:70):
+
+<Tabs items={['Arguments', 'Return Values']}>
+<Tab value="Arguments">
+
+```c
+#define __fn_rarg0  rdi    /* First argument */
+#define __fn_rarg1  rsi    /* Second argument */
+#define __fn_rarg2  rdx    /* Third argument */
+#define __fn_rarg3  rcx    /* Fourth argument */
+#define __fn_rarg4  r8     /* Fifth argument */
+#define __fn_rarg5  r9     /* Sixth argument */
+```
+
+</Tab>
+<Tab value="Return Values">
+
+```c
+#define __fn_rret0  rax    /* Primary return value */
+#define __fn_rret1  rdx    /* Secondary return value */
+```
+
+</Tab>
+</Tabs>
+
+## Memory Management
+
+### Paging Configuration
+
+Unikraft supports both 4-level and 5-level paging on x86_64:
+
+```c
+#ifdef CONFIG_PAGING_5LEVEL
+#define PT_LEVELS    5
+#else
+#define PT_LEVELS    4
+#endif
+
+#define X86_PT_LEVEL_SHIFT      9
+#define X86_PT_PTES_PER_LEVEL   512
+```
+
+### Page Sizes
+
+<Tabs items={['4KB Pages', '2MB Pages', '1GB Pages']}>
+<Tab value="4KB Pages">
+
+```c
+#define PAGE_LEVEL       0
+#define PAGE_SHIFT       12
+#define PAGE_SIZE        0x1000UL      /* 4 KB */
+#define PAGE_MASK        (~(PAGE_SIZE - 1))
+```
+
+</Tab>
+<Tab value="2MB Pages">
+
+```c
+#define PAGE_LARGE_LEVEL  1
+#define PAGE_LARGE_SHIFT  21
+#define PAGE_LARGE_SIZE   0x200000UL   /* 2 MB */
+#define PAGE_LARGE_MASK   (~(PAGE_LARGE_SIZE - 1))
+```
+
+</Tab>
+<Tab value="1GB Pages">
+
+```c
+#define PAGE_HUGE_LEVEL   2
+#define PAGE_HUGE_SHIFT   30
+#define PAGE_HUGE_SIZE    0x40000000UL /* 1 GB */
+#define PAGE_HUGE_MASK    (~(PAGE_HUGE_SIZE - 1))
+```
+
+</Tab>
+</Tabs>
+
+### Virtual Address Space
+
+x86_64 uses canonical addressing (source:arch/x86/x86_64/include/uk/asm/paging.h:114):
+
+```c
+#if PT_LEVELS == 5
+#define X86_VADDR_BITS    57
+#else
+#define X86_VADDR_BITS    48
+#endif
+
+#define X86_PTE_PADDR_BITS  52
+```
+
+Virtual addresses must be in canonical form where bit 47 (or 56 for 5-level) is replicated to all upper bits.
+
+### Page Table Entry Flags
+
+```c
+#define X86_PTE_PRESENT    0x001UL  /* Page is present */
+#define X86_PTE_RW         0x002UL  /* Read/write */
+#define X86_PTE_US         0x004UL  /* User/supervisor */
+#define X86_PTE_PWT        0x008UL  /* Page write-through */
+#define X86_PTE_PCD        0x010UL  /* Page cache disabled */
+#define X86_PTE_ACCESSED   0x020UL  /* Accessed flag */
+#define X86_PTE_DIRTY      0x040UL  /* Dirty flag */
+#define X86_PTE_PSE        0x080UL  /* Page size extension */
+#define X86_PTE_GLOBAL     0x100UL  /* Global page */
+#define X86_PTE_NX         (1UL << 63)  /* No execute */
+```
+
+### Page Attribute Table (PAT)
+
+The PAT defines memory caching behavior (source:arch/x86/x86_64/include/uk/asm/paging.h:216):
+
+```c
+#define X86_PAT_UC    0x00  /* Uncacheable */
+#define X86_PAT_WC    0x01  /* Write combining */
+#define X86_PAT_WT    0x04  /* Write through */
+#define X86_PAT_WP    0x05  /* Write protected */
+#define X86_PAT_WB    0x06  /* Write back */
+#define X86_PAT_UCM   0x07  /* Uncached */
+```
+
+### TLB Management
+
+```c
+static inline void ukarch_tlb_flush_entry(__vaddr_t vaddr)
+{
+    __asm__ __volatile__("invlpg (%0)" :: "r"(vaddr) : "memory");
+}
+
+static inline void ukarch_tlb_flush(void)
+{
+    ukarch_pt_write_base(ukarch_pt_read_base());
+}
+```
+
+## Context Switching
+
+### Context Structure
+
+Each thread maintains a context containing saved registers (source:arch/x86/ctx.c:1):
+
+```c
+struct ukarch_ctx {
+    unsigned long sp;   /* Stack pointer */
+    unsigned long ip;   /* Instruction pointer */
+};
+```
+
+### Context Switch Assembly
+
+The context switch preserves callee-saved registers (source:arch/x86/x86_64/ctx.S:90):
+
+```asm
+ENTRY(ukarch_ctx_switch)
+    pushq %rbp
+    pushq %rbx
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    movq %rsp, UKARCH_CTX_OFFSETOF_SP(%rdi)
+    movq UKARCH_CTX_OFFSETOF_SP(%rsi), %rsp
+    lea .Lresume(%rip), %rbx
+    movq %rbx, UKARCH_CTX_OFFSETOF_IP(%rdi)
+    pushq UKARCH_CTX_OFFSETOF_IP(%rsi)
+    ret
+```
+
+## Extended State Management
+
+### FPU/SSE/AVX Context
+
+The extended context size accommodates various CPU features (source:arch/x86/x86_64/include/uk/asm/ctx.h:49):
+
+```c
+#define UKARCH_ECTX_SIZE   832   /* FPU + SSE + AVX */
+#define UKARCH_ECTX_ALIGN  64    /* 64-byte alignment */
+```
+
+This includes:
+- **Legacy FP State**: 160 bytes
+- **Legacy SSE State**: 352 bytes
+- **XSAVE Header**: 64 bytes
+- **YMM State (AVX)**: 256 bytes
+
+## CPU Feature Detection
+
+### CPUID Interface
+
+```c
+static inline void ukarch_x86_cpuid(__u32 fn, __u32 subfn,
+                                    __u32 *eax, __u32 *ebx,
+                                    __u32 *ecx, __u32 *edx)
+{
+    __asm__ __volatile__("cpuid"
+                        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+                        : "a"(fn), "c"(subfn));
+}
+```
+
+### Feature Bits
+
+Key CPU features can be detected via CPUID (source:arch/x86/x86_64/include/uk/asm/lcpu.h:177):
+
+```c
+/* CPUID.1:ECX */
+#define X86_CPUID1_ECX_x2APIC   (1 << 21)
+#define X86_CPUID1_ECX_XSAVE    (1 << 26)
+#define X86_CPUID1_ECX_AVX      (1 << 28)
+
+/* CPUID.7:EBX */
+#define X86_CPUID7_EBX_FSGSBASE (1 << 0)
+```
+
+## Memory Barriers
+
+x86_64 provides strong memory ordering guarantees:
+
+```c
+#define mb()   __asm__ __volatile__ ("mfence" : : : "memory")
+#define rmb()  __asm__ __volatile__ ("lfence" : : : "memory")
+#define wmb()  __asm__ __volatile__ ("sfence" : : : "memory")
+```
+
+## Processor Optimization
+
+Unikraft supports multiple x86_64 processor targets via configuration (source:arch/x86/x86_64/Config.uk:1):
+
+<Tabs items={['Intel', 'AMD', 'Generic']}>
+<Tab value="Intel">
+
+- **Generic 64-bit**: Baseline x86_64 support
+- **Core 2**: MMX, SSE, SSE2, SSE3, SSSE3
+- **Core i7**: Adds SSE4.1, SSE4.2
+- **Core i7 +AVX**: Adds AVX, AES, PCLMUL
+- **Atom**: Optimized for low-power CPUs
+
+</Tab>
+<Tab value="AMD">
+
+- **Athlon64/Opteron**: K8 cores with 3DNow!
+- **Family 10h**: Adds SSE4A, ABM
+- **Family 15h (Bulldozer)**: FMA4, AVX, XOP
+- **Family 16h**: F16C, BMI, AVX
+
+</Tab>
+<Tab value="Generic">
+
+- **Native**: Auto-detect host CPU (cross-compilation incompatible)
+- **Generic 64-bit**: Maximum compatibility
+
+</Tab>
+</Tabs>
+
+## Cache Line Size
+
+```c
+#define CACHE_LINE_SIZE  64
+```
+
+The x86_64 architecture typically uses 64-byte cache lines for optimal performance.
+
+## Stack Alignment
+
+```c
+#define UKARCH_SP_ALIGN       16
+#define UKARCH_SP_ALIGN_MASK  15
+```
+
+Stack pointers must be 16-byte aligned per the AMD64 ABI specification.
+
+## Boot Process
+
+The x86_64 boot sequence follows these steps:
+
+1. **Firmware Initialization**: BIOS/UEFI loads the bootloader
+2. **Long Mode Setup**: Enable PAE, set EFER.LME, enable paging
+3. **Jump to 64-bit Code**: Transfer control to Unikraft kernel
+4. **System Initialization**: Set up GDT, IDT, and page tables
+5. **BSS Clearing**: Zero uninitialized data sections
+6. **Constructor Execution**: Run C++ constructors and init functions
+7. **Main Entry**: Jump to `ukplat_entry()`
+
+## Platform Support
+
+The x86_64 architecture is supported on:
+
+- **KVM**: Hardware-accelerated virtualization
+- **Xen**: Paravirtualized and HVM modes
+- **QEMU/KVM**: Full system emulation
+- **Firecracker**: Lightweight microVM
+- **Linux Userspace**: Using Linux system calls
+
+## Performance Considerations
+
+### Spinwait Optimization
+
+```c
+static inline void ukarch_spinwait(void)
+{
+    __asm__ __volatile__("pause" : : : "memory");
+}
+```
+
+The `pause` instruction improves spin-lock performance by reducing power consumption and preventing memory order violations.
+
+### Fast System Calls
+
+x86_64 supports fast system calls via the `syscall` instruction, configured through MSRs.
+
+## References
+
+- **Intel 64 and IA-32 Architectures Software Developer's Manual**
+- **AMD64 Architecture Programmer's Manual**
+- **System V AMD64 ABI**
+- Source: `arch/x86/` directory in Unikraft repository

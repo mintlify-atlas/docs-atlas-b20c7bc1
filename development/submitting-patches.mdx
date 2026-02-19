@@ -1,0 +1,427 @@
+---
+title: Submitting Patches
+description: Guide to submitting patches and pull requests to Unikraft
+---
+
+This guide explains how to submit patches and pull requests to the Unikraft project. Following these guidelines ensures your contributions can be reviewed and merged efficiently.
+
+## Before You Submit
+
+Before submitting your changes, ensure you have:
+
+<Accordion title="Prerequisites Checklist">
+  - Read the [contribution guidelines](/development/contributing)
+  - Tested your changes against relevant architectures and platforms
+  - Run the [`checkpatch.uk`](https://github.com/unikraft/unikraft/blob/staging/support/scripts/checkpatch.uk) script on your commits
+  - Verified all automated checks pass
+  - Updated relevant documentation
+  - Added a proper DCO sign-off to all commits
+</Accordion>
+
+## Commit Message Format
+
+Unikraft follows a strict commit message format to maintain a clean and informative git history.
+
+### Format Structure
+
+```
+component: Brief summary (max 75 characters)
+
+Detailed description of the changes made, explaining the motivation
+and context. Wrap lines at 75 characters.
+
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+### Component Prefix
+
+The commit message must start with a component prefix followed by a colon:
+
+```
+// Single component
+lib/ukalloc: Add new memory allocation function
+
+// Multiple components
+{lib/ukalloc,lib/ukmm}: Update memory management APIs
+
+// Component with wildcards
+lib/uk*: Update all lib/uk* libraries
+```
+
+Common component prefixes:
+- `lib/libname`: Library changes
+- `plat/platform`: Platform-specific changes
+- `arch/architecture`: Architecture-specific changes
+- `doc`: Documentation changes
+- `build`: Build system changes
+- `Config.uk`: Kconfig changes
+
+### Summary Line
+
+- **Maximum 75 characters** (strictly enforced)
+- Start with **capital letter** after the component prefix
+- Use **imperative mood**: "Add feature" not "Added feature"
+- No period at the end
+- Be descriptive but concise
+
+### Examples
+
+**Good commit messages:**
+
+```
+lib/ukalloc: Add support for aligned memory allocation
+
+This patch introduces uk_posix_memalign() function to allocate
+memory with specified alignment requirements.
+
+Signed-off-by: John Doe <john.doe@example.com>
+```
+
+```
+{lib/vfscore,lib/posix-socket}: Fix file descriptor handling
+
+Ensure file descriptors are properly closed and cleaned up when
+an error occurs during socket creation.
+
+Signed-off-by: Jane Smith <jane.smith@example.com>
+```
+
+**Bad commit messages:**
+
+```
+// Missing component prefix
+Fixed a bug in memory allocation
+
+// No capital letter after prefix
+lib/ukalloc: add new function
+
+// Too long (exceeds 75 characters)
+lib/ukalloc: Add support for aligned memory allocation with multiple options
+
+// Past tense instead of imperative
+lib/ukalloc: Added new memory allocation function
+```
+
+### Detailed Description
+
+- Explain **why** the change is needed, not just what changed
+- Wrap lines at **75 characters**
+- Include relevant context:
+  - Bug being fixed
+  - Feature being added
+  - Problem being solved
+- Reference related issues or PRs if applicable
+- Leave a blank line between summary and description
+
+## Developer Certificate of Origin (DCO)
+
+All commits **must** include a DCO sign-off line. This certifies that you have the right to submit the code under the project's license.
+
+### Adding Sign-off
+
+Use the `-s` flag when committing:
+
+```bash
+git commit -s -m "component: Summary of changes"
+```
+
+This automatically adds:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+### Sign-off Requirements
+
+- **Name and email must match** your git configuration
+- Use your **real name** (no pseudonyms)
+- Use a **valid email address**
+- Format: `Signed-off-by: FirstName LastName <email@domain.com>`
+
+### Multiple Authors
+
+For patches with multiple authors:
+
+```
+Signed-off-by: Primary Author <author@example.com>
+Co-developed-by: Second Author <coauthor@example.com>
+Signed-off-by: Second Author <coauthor@example.com>
+```
+
+Note: `Co-developed-by:` must be immediately followed by `Signed-off-by:` with the same name and email.
+
+### Adding Sign-off to Existing Commits
+
+If you forgot to add sign-off:
+
+```bash
+# Amend last commit
+git commit --amend -s
+
+# Rebase and sign-off multiple commits
+git rebase HEAD~3 --signoff
+```
+
+## Pull Request Process
+
+<Steps>
+  <Step title="Prepare Your Branch">
+    Ensure your branch is up to date with the latest changes:
+    
+    ```bash
+    git checkout staging
+    git pull upstream staging
+    git checkout your-feature-branch
+    git rebase staging
+    ```
+  </Step>
+
+  <Step title="Run Final Checks">
+    Before pushing, run checkpatch on all your commits:
+    
+    ```bash
+    # Check last commit
+    ./support/scripts/checkpatch.uk -g HEAD~1..HEAD
+    
+    # Check all commits in your branch
+    ./support/scripts/checkpatch.uk -g staging..HEAD
+    ```
+    
+    Fix any errors or warnings reported.
+  </Step>
+
+  <Step title="Push Your Branch">
+    Push your branch to your fork:
+    
+    ```bash
+    git push origin your-feature-branch
+    ```
+  </Step>
+
+  <Step title="Create Pull Request">
+    Open a pull request on GitHub against the `staging` branch.
+    
+    The PR will be automatically populated with a template. Fill it out completely.
+  </Step>
+
+  <Step title="Complete PR Template">
+    Provide all required information in the PR template:
+    
+    - **Description of Changes**: Detailed explanation of what was changed and why
+    - **Related Work**: Link to related PRs or issues
+    - **PR Checklist**: Check all applicable boxes
+  </Step>
+</Steps>
+
+### PR Template
+
+When you create a pull request, you'll see this template:
+
+```markdown
+### Description of Changes
+
+<!--
+Provide a detailed description of the changes made in this PR.
+
+This should include, as applicable:
+- Context & motivation (e.g., fixes bug X, introduces feature that enables Y)
+- Overview of code changes (what has been changed and to what end)
+- Public interface changes (library API(s), syscall API/ABI, Kconfig, etc.)
+- Any other notable mentions regarding review, testing, and integration
+-->
+
+### Related Work
+
+<!--
+Link here any open PRs that this work depends on or which it will conflict with.
+-->
+
+N/A
+
+### PR Checklist
+
+- [ ] Read the contribution guidelines
+- [ ] Tested your changes against relevant architectures and platforms
+- [ ] Ran the checkpatch.uk on your commit series
+- [ ] Updated relevant documentation
+```
+
+## Automated Checks
+
+All pull requests undergo automated checks:
+
+### 1. DCO Sign-off Check
+
+- Verifies all commits have `Signed-off-by:` line
+- Checks format: `Signed-off-by: Name <email@domain.com>`
+- **Fails if**: Any commit lacks proper sign-off
+
+### 2. PR Title Check
+
+- Validates PR title follows Unikraft conventions
+- Must match pattern: `component: Description`
+- Must start with capital letter after colon
+- **Fails if**: Title doesn't match format
+
+### 3. PR Title Length Check
+
+- Maximum 75 characters for PR title
+- **Fails if**: Title exceeds 75 characters
+
+### 4. Checkpatch Validation
+
+- Runs checkpatch on all commits in the PR
+- Checks code style and formatting
+- **Fails if**: Code doesn't meet standards
+
+## Addressing Review Feedback
+
+### Making Changes
+
+When reviewers request changes:
+
+1. Make the requested modifications
+2. Commit the changes:
+   ```bash
+   git add modified_files
+   git commit -s -m "component: Address review feedback"
+   ```
+3. Push to your branch:
+   ```bash
+   git push origin your-feature-branch
+   ```
+
+The PR will automatically update with your new commits.
+
+### Squashing Commits
+
+Before merging, you may be asked to squash commits:
+
+```bash
+# Interactive rebase to squash last 3 commits
+git rebase -i HEAD~3
+
+# Mark commits as 'squash' or 's' except the first one
+# Save and edit the combined commit message
+# Force push (only to your own branch!)
+git push -f origin your-feature-branch
+```
+
+### Amending Commits
+
+To fix the last commit:
+
+```bash
+git add modified_files
+git commit --amend -s
+git push -f origin your-feature-branch
+```
+
+## Best Practices
+
+### Commit Organization
+
+- **One logical change per commit**
+- Split large changes into smaller, reviewable commits
+- Each commit should build and work independently
+- Arrange commits in logical order
+
+### PR Size
+
+- Keep PRs **focused and manageable**
+- Large changes should be split into multiple PRs when possible
+- Easier to review = faster to merge
+
+### Communication
+
+- Respond to review comments promptly
+- Ask questions if feedback is unclear
+- Explain your reasoning when disagreeing with suggestions
+- Be respectful and professional
+
+### Testing
+
+Before submitting:
+
+- **Build test**: Ensure code compiles
+- **Functional test**: Verify features work as expected
+- **Regression test**: Check existing functionality isn't broken
+- **Platform test**: Test on relevant architectures/platforms
+
+## Common Issues and Solutions
+
+### Missing DCO Sign-off
+
+**Problem**: Forgot to sign-off commits
+
+**Solution**:
+```bash
+# Sign-off last commit
+git commit --amend -s
+
+# Sign-off multiple commits
+git rebase HEAD~N --signoff
+git push -f origin your-feature-branch
+```
+
+### Commit Message Format Error
+
+**Problem**: Commit message doesn't follow format
+
+**Solution**:
+```bash
+# Edit last commit message
+git commit --amend
+
+# Edit multiple commit messages
+git rebase -i HEAD~N
+# Mark commits as 'reword' or 'r'
+```
+
+### Checkpatch Failures
+
+**Problem**: Code doesn't meet style guidelines
+
+**Solution**:
+```bash
+# Run checkpatch to see issues
+./support/scripts/checkpatch.uk -f path/to/file.c
+
+# Use clang-format to auto-fix formatting
+clang-format -i path/to/file.c
+
+# Commit the fixes
+git add path/to/file.c
+git commit --amend -s
+```
+
+### Merge Conflicts
+
+**Problem**: Branch conflicts with staging
+
+**Solution**:
+```bash
+# Update staging branch
+git checkout staging
+git pull upstream staging
+
+# Rebase your branch
+git checkout your-feature-branch
+git rebase staging
+
+# Resolve conflicts, then:
+git add resolved_files
+git rebase --continue
+
+# Force push
+git push -f origin your-feature-branch
+```
+
+## Resources
+
+- [GitHub Repository](https://github.com/unikraft/unikraft)
+- [Pull Request Template](https://github.com/unikraft/unikraft/blob/staging/.github/PULL_REQUEST_TEMPLATE.md)
+- [Checkpatch Script](https://github.com/unikraft/unikraft/blob/staging/support/scripts/checkpatch.uk)
+- [Developer Certificate of Origin](https://developercertificate.org/)
+- [Contributing Guide](/development/contributing)
+- [Coding Conventions](/development/coding-conventions)

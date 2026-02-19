@@ -1,0 +1,614 @@
+---
+title: Creating Internal Libraries
+description: Guide to developing internal Unikraft libraries with proper structure and build integration
+---
+
+Internal libraries are the building blocks of Unikraft. This guide covers creating new internal libraries that integrate seamlessly with the Unikraft core.
+
+## Library Architecture
+
+Internal libraries reside in `lib/` and provide core functionality that other libraries and applications depend on.
+
+### Design Principles
+
+1. **Modularity**: Each library should have a single, well-defined purpose
+2. **Minimal dependencies**: Depend only on essential libraries
+3. **Clean interfaces**: Export clean, documented APIs
+4. **No global state**: Use registration mechanisms instead
+5. **Architecture awareness**: Support multiple architectures when needed
+
+## Directory Structure
+
+Standard internal library layout:
+
+```
+lib/mynewlib/
+├── Config.uk              # Kconfig configuration
+├── Makefile.uk            # Build rules
+├── exportsyms.uk          # Exported symbols (optional)
+├── include/
+│   └── uk/
+│       └── mynewlib.h     # Public API
+├── internal.h             # Private definitions
+├── core.c                 # Core functionality
+├── init.c                 # Initialization
+└── arch/
+    ├── x86_64/
+    │   └── specific.c
+    └── arm64/
+        └── specific.c
+```
+
+## Build Configuration Files
+
+### Makefile.uk Structure
+
+The `Makefile.uk` follows a standard pattern:
+
+```makefile
+################################################################################
+# Library registration
+################################################################################
+$(eval $(call addlib_s,libmynewlib,$(CONFIG_LIBMYNEWLIB)))
+
+################################################################################
+# Library includes
+################################################################################
+# Global includes (available to all libraries)
+CINCLUDES-$(CONFIG_LIBMYNEWLIB)    += -I$(LIBMYNEWLIB_BASE)/include
+CXXINCLUDES-$(CONFIG_LIBMYNEWLIB)  += -I$(LIBMYNEWLIB_BASE)/include
+
+# Library-specific includes (only for this library)
+LIBMYNEWLIB_CINCLUDES-y += -I$(LIBMYNEWLIB_BASE)
+LIBMYNEWLIB_ASINCLUDES-y += -I$(LIBMYNEWLIB_BASE)
+
+################################################################################
+# Library flags
+################################################################################
+LIBMYNEWLIB_CFLAGS-y   += -std=c11
+LIBMYNEWLIB_CXXFLAGS-y += -std=c++17
+
+# Conditional flags
+LIBMYNEWLIB_CFLAGS-$(CONFIG_OPTIMIZE_PERF) += -O3
+
+################################################################################
+# Library sources
+################################################################################
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/core.c
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/init.c
+
+# Optional components
+LIBMYNEWLIB_SRCS-$(CONFIG_LIBMYNEWLIB_FEATURE) += $(LIBMYNEWLIB_BASE)/feature.c
+
+# Architecture-specific sources
+LIBMYNEWLIB_SRCS-$(CONFIG_ARCH_X86_64) += $(LIBMYNEWLIB_BASE)/arch/x86_64/specific.c
+LIBMYNEWLIB_SRCS-$(CONFIG_ARCH_ARM_64) += $(LIBMYNEWLIB_BASE)/arch/arm64/specific.c
+
+################################################################################
+# Library linker scripts
+################################################################################
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/extra.ld
+```
+
+### Config.uk Structure
+
+Configuration using Kconfig syntax:
+
+```kconfig
+menuconfig LIBMYNEWLIB
+	bool "mynewlib: Description of library functionality"
+	default n
+	select LIBUKDEBUG        # Required dependency
+	select LIBNOLIBC if !HAVE_LIBC
+	help
+		Detailed description of what this library provides.
+		Multiple lines are supported.
+
+if LIBMYNEWLIB
+	config LIBMYNEWLIB_FEATURE
+		bool "Enable advanced feature"
+		default y
+		depends on LIBUKALLOC
+		help
+			Enable the advanced feature that requires
+			dynamic memory allocation.
+
+	config LIBMYNEWLIB_MAX_ITEMS
+		int "Maximum number of items"
+		default 128
+		range 16 4096
+		help
+			Maximum number of items that can be managed.
+
+	choice
+		prompt "Implementation strategy"
+		default LIBMYNEWLIB_IMPL_FAST
+
+		config LIBMYNEWLIB_IMPL_FAST
+			bool "Fast implementation"
+			help
+				Optimized for speed.
+
+		config LIBMYNEWLIB_IMPL_SMALL
+			bool "Small implementation"
+			help
+				Optimized for size.
+	endchoice
+
+	config LIBMYNEWLIB_DEBUG
+		bool "Debug messages"
+		default n
+		depends on LIBUKDEBUG
+		help
+			Enable debug output for troubleshooting.
+endif
+```
+
+## API Design
+
+### Public Header Structure
+
+Example `include/uk/mynewlib.h`:
+
+```c
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2024, Your Name <your.email@example.com>
+ */
+#ifndef __UK_MYNEWLIB_H__
+#define __UK_MYNEWLIB_H__
+
+#include <uk/config.h>
+#include <uk/essentials.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Opaque handle to library object
+ */
+struct uk_mynewlib_obj;
+
+/**
+ * Initialize the mynewlib subsystem
+ *
+ * @param a Allocator to use for internal allocations
+ * @return 0 on success, negative errno on failure
+ */
+int uk_mynewlib_init(struct uk_alloc *a);
+
+/**
+ * Create a new object
+ *
+ * @param name Object name (can be NULL)
+ * @return Pointer to object or NULL on failure
+ */
+struct uk_mynewlib_obj *uk_mynewlib_create(const char *name);
+
+/**
+ * Destroy an object
+ *
+ * @param obj Object to destroy
+ */
+void uk_mynewlib_destroy(struct uk_mynewlib_obj *obj);
+
+/**
+ * Perform operation on object
+ *
+ * @param obj Object to operate on
+ * @param data Input data
+ * @param len Length of data
+ * @return Number of bytes processed, or negative errno on error
+ */
+ssize_t uk_mynewlib_process(struct uk_mynewlib_obj *obj,
+			      const void *data, size_t len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __UK_MYNEWLIB_H__ */
+```
+
+### Implementation Patterns
+
+#### Initialization with Constructors
+
+```c
+#include <uk/init.h>
+#include <uk/mynewlib.h>
+#include <uk/print.h>
+#include <uk/alloc.h>
+
+static struct uk_alloc *mynewlib_allocator;
+
+int uk_mynewlib_init(struct uk_alloc *a)
+{
+	UK_ASSERT(a);
+	
+	if (mynewlib_allocator)
+		return -EBUSY; /* Already initialized */
+	
+	mynewlib_allocator = a;
+	uk_pr_info("mynewlib initialized\n");
+	return 0;
+}
+
+/* Auto-initialization at boot */
+static int mynewlib_early_init(void)
+{
+	struct uk_alloc *a = uk_alloc_get_default();
+	
+	if (!a) {
+		uk_pr_warn("mynewlib: No allocator available\n");
+		return -ENOMEM;
+	}
+	
+	return uk_mynewlib_init(a);
+}
+
+uk_sys_initcall(mynewlib_early_init);
+```
+
+#### Registration Mechanism
+
+Allow other libraries to register with your library:
+
+```c
+/* In include/uk/mynewlib.h */
+struct uk_mynewlib_driver {
+	const char *name;
+	int (*init)(void *priv);
+	int (*process)(void *priv, const void *data, size_t len);
+	void *priv;
+};
+
+int uk_mynewlib_register_driver(struct uk_mynewlib_driver *drv);
+
+/* In core.c */
+#include <uk/list.h>
+
+static UK_LIST_HEAD(driver_list);
+
+struct driver_node {
+	struct uk_mynewlib_driver *driver;
+	struct uk_list_head list;
+};
+
+int uk_mynewlib_register_driver(struct uk_mynewlib_driver *drv)
+{
+	struct driver_node *node;
+	
+	UK_ASSERT(drv);
+	UK_ASSERT(drv->name);
+	UK_ASSERT(drv->process);
+	
+	node = uk_malloc(mynewlib_allocator, sizeof(*node));
+	if (!node)
+		return -ENOMEM;
+	
+	node->driver = drv;
+	uk_list_add_tail(&node->list, &driver_list);
+	
+	uk_pr_info("Registered driver: %s\n", drv->name);
+	return 0;
+}
+```
+
+## Advanced Build Features
+
+### Per-File Flags
+
+Apply specific flags to individual source files:
+
+```makefile
+# Set flags for core.c
+LIBMYNEWLIB_CORE_FLAGS-y += -O3 -funroll-loops
+
+# Disable specific warnings for legacy code
+LIBMYNEWLIB_LEGACY_FLAGS-y += -Wno-unused-parameter
+```
+
+The pattern is: `LIB<NAME>_<BASENAME>_FLAGS-y`
+
+### ISR Context Code
+
+Mark code that runs in interrupt context:
+
+```makefile
+# This code runs in interrupt context
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/interrupt.c|isr
+```
+
+The `|isr` suffix adds `-D__INTERRUPTSAFE__` flag.
+
+### Build-Time Generation
+
+Generate code or headers during build:
+
+```makefile
+# Generate header from AWK script
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/generator.awk>.h
+LIBMYNEWLIB_GENERATOR_SUBBUILD = include/uk
+LIBMYNEWLIB_GENERATOR_AWKINCLUDES-y += $(LIBMYNEWLIB_BASE)/input.txt
+LIBMYNEWLIB_GENERATOR_AWKFLAGS-y += -F ':'
+```
+
+### Linker Scripts
+
+Provide linker script sections:
+
+```ld
+/* extra.ld */
+SECTIONS {
+	.uk_mynewlib_data : {
+		PROVIDE(uk_mynewlib_data_start = .);
+		KEEP(*(.uk_mynewlib_data))
+		PROVIDE(uk_mynewlib_data_end = .);
+	}
+}
+```
+
+Access in code:
+
+```c
+extern char uk_mynewlib_data_start[];
+extern char uk_mynewlib_data_end[];
+
+void mynewlib_iterate_data(void)
+{
+	struct mynewlib_entry *e;
+	
+	for (e = (struct mynewlib_entry *)uk_mynewlib_data_start;
+	     e < (struct mynewlib_entry *)uk_mynewlib_data_end;
+	     e++) {
+		/* Process entry */
+	}
+}
+```
+
+### Symbol Exports
+
+Control exported symbols in `exportsyms.uk`:
+
+```
+uk_mynewlib_init
+uk_mynewlib_create
+uk_mynewlib_destroy
+uk_mynewlib_process
+uk_mynewlib_register_driver
+```
+
+## Integration Patterns
+
+### Allocator Interface
+
+Provide allocator abstraction:
+
+```c
+struct uk_mynewlib_allocator {
+	void *(*alloc)(void *priv, size_t size);
+	void (*free)(void *priv, void *ptr);
+	void *priv;
+};
+
+/* Helper for uk_alloc */
+static void *mynewlib_uk_alloc(void *priv, size_t size)
+{
+	return uk_malloc(priv, size);
+}
+
+static void mynewlib_uk_free(void *priv, void *ptr)
+{
+	uk_free(priv, ptr);
+}
+
+struct uk_mynewlib_allocator *
+uk_mynewlib_allocator_from_uk(struct uk_alloc *a)
+{
+	struct uk_mynewlib_allocator *ma;
+	
+	ma = uk_malloc(a, sizeof(*ma));
+	if (!ma)
+		return NULL;
+	
+	ma->alloc = mynewlib_uk_alloc;
+	ma->free = mynewlib_uk_free;
+	ma->priv = a;
+	
+	return ma;
+}
+```
+
+### Event System Integration
+
+Use Unikraft's event system:
+
+```c
+#include <uk/event.h>
+
+/* Define event types */
+enum uk_mynewlib_event {
+	UK_MYNEWLIB_EVENT_CREATE,
+	UK_MYNEWLIB_EVENT_DESTROY,
+};
+
+/* Register event handler */
+UK_EVENT(UK_MYNEWLIB_EVENT_CREATE);
+UK_EVENT(UK_MYNEWLIB_EVENT_DESTROY);
+
+/* Emit events */
+void uk_mynewlib_create_internal(const char *name)
+{
+	struct uk_mynewlib_obj *obj;
+	
+	obj = mynewlib_alloc_obj(name);
+	if (!obj)
+		return NULL;
+	
+	/* Notify listeners */
+	uk_raise_event(UK_MYNEWLIB_EVENT_CREATE, obj);
+	
+	return obj;
+}
+```
+
+### Library Parameters
+
+Allow runtime configuration:
+
+```makefile
+# In Makefile.uk
+$(eval $(call addlib_paramprefix,libmynewlib,mynewlib))
+```
+
+```c
+#include <uk/libparam.h>
+
+static int cache_size = 1024;
+UK_LIBPARAM(cache_size, int, "Internal cache size");
+
+static char name[64] = "default";
+UK_LIBPARAM_STR(name, sizeof(name), "Instance name");
+```
+
+Users can set: `mynewlib.cache_size=2048 mynewlib.name=custom`
+
+## Testing Internal Libraries
+
+### Unit Tests
+
+Use `libuktest` for unit testing:
+
+```c
+#include <uk/test.h>
+#include <uk/mynewlib.h>
+
+UK_TESTCASE(mynewlib, test_create)
+{
+	struct uk_mynewlib_obj *obj;
+	
+	obj = uk_mynewlib_create("test");
+	UK_TEST_ASSERT_NOT_NULL(obj);
+	
+	uk_mynewlib_destroy(obj);
+}
+
+UK_TESTCASE(mynewlib, test_process)
+{
+	struct uk_mynewlib_obj *obj;
+	char data[] = "test data";
+	ssize_t ret;
+	
+	obj = uk_mynewlib_create("test");
+	UK_TEST_ASSERT_NOT_NULL(obj);
+	
+	ret = uk_mynewlib_process(obj, data, sizeof(data));
+	UK_TEST_ASSERT(ret == sizeof(data));
+	
+	uk_mynewlib_destroy(obj);
+}
+
+uk_testsuite_register(mynewlib, NULL);
+```
+
+Add to `Makefile.uk`:
+
+```makefile
+ifneq ($(filter y,$(CONFIG_LIBMYNEWLIB_TEST) $(CONFIG_LIBUKTEST_ALL)),)
+LIBMYNEWLIB_SRCS-y += $(LIBMYNEWLIB_BASE)/tests/test_mynewlib.c
+endif
+```
+
+## Real-World Examples
+
+Study these internal libraries:
+
+### Simple Libraries
+- **ukalloc** (`lib/ukalloc/`): Allocator abstraction
+- **ukdebug** (`lib/ukdebug/`): Debug/logging infrastructure
+- **uklock** (`lib/uklock/`): Locking primitives
+
+### Complex Libraries
+- **vfscore** (`lib/vfscore/`): Virtual filesystem
+- **syscall_shim** (`lib/syscall_shim/`): System call layer
+- **uksched** (`lib/uksched/`): Scheduler interface
+
+### Device Libraries
+- **uknetdev** (`lib/uknetdev/`): Network device abstraction
+- **ukblkdev** (`lib/ukblkdev/`): Block device abstraction
+
+## Best Practices
+
+1. **Consistent naming**: Use `uk_<libname>_` prefix for all exported symbols
+2. **Error handling**: Return negative errno values on error
+3. **Assertions**: Use `UK_ASSERT()` for internal invariants
+4. **Documentation**: Document all public APIs with Doxygen comments
+5. **Initialization**: Use appropriate `uk_*_initcall()` priority
+6. **Memory management**: Always check allocation failures
+7. **Thread safety**: Document thread-safety guarantees
+8. **Dependencies**: Minimize and clearly declare dependencies
+9. **Testing**: Provide unit tests for critical functionality
+10. **Performance**: Consider ISR context and cache effects
+
+## Registration with Core
+
+Add your library to `lib/Makefile.uk`:
+
+```makefile
+$(eval $(call import_lib,$(CONFIG_UK_BASE)/lib/mynewlib))
+```
+
+Add to `lib/Config.uk`:
+
+```kconfig
+source "$(CONFIG_UK_BASE)/lib/mynewlib/Config.uk"
+```
+
+## Debugging Tips
+
+### Enable Debug Output
+
+```c
+#if CONFIG_LIBMYNEWLIB_DEBUG
+#define MYNEWLIB_DEBUG(fmt, ...) \
+	uk_pr_debug("mynewlib: " fmt, ##__VA_ARGS__)
+#else
+#define MYNEWLIB_DEBUG(fmt, ...) do {} while (0)
+#endif
+
+void mynewlib_function(void)
+{
+	MYNEWLIB_DEBUG("Function called\n");
+	// ...
+}
+```
+
+### Trace Points
+
+```c
+#include <uk/trace.h>
+
+UK_TRACEPOINT(uk_mynewlib_create_entry, "name=%s", const char *);
+UK_TRACEPOINT(uk_mynewlib_create_exit, "obj=%p", void *);
+
+struct uk_mynewlib_obj *uk_mynewlib_create(const char *name)
+{
+	struct uk_mynewlib_obj *obj;
+	
+	uk_trace_uk_mynewlib_create_entry(name);
+	
+	obj = mynewlib_alloc_obj(name);
+	
+	uk_trace_uk_mynewlib_create_exit(obj);
+	
+	return obj;
+}
+```
+
+## Next Steps
+
+- [Porting Applications](/advanced/porting-applications)
+- [Platform Development](/advanced/platform-development)
+- [Performance Optimization](/advanced/performance-optimization)
