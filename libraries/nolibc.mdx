@@ -257,9 +257,8 @@ The exact size depends on which functions your application actually uses, as the
 
 1. **Limited stdio buffering**: No internal buffering for stdio functions
 2. **fprintf() restrictions**: Only suitable for `stdout` and `stderr`, not other files or devices
-3. **No fscanf derivatives**: Input can only be received from `stdin` - `fscanf()` and related functions are not implemented
-4. **File operations**: Limited file I/O capabilities without VFS support
-5. **VFS dependency**: File operations like `fopen()`, `fread()`, `fwrite()` require `CONFIG_HAVE_VFS` to be enabled
+3. **File operations**: Limited file I/O capabilities without VFS support
+4. **VFS dependency**: File operations like `fopen()`, `fread()`, `fwrite()`, `fscanf()` require `CONFIG_HAVE_VFS` to be enabled
 </Warning>
 
 ## Source Code Structure
